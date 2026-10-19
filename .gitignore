@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+CHCODE_check_report.xlsx
+reports/
+.streamlit/secrets.toml
+uploads/
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+artifacts/
+.preview/

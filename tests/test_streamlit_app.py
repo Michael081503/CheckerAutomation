@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
-from test_web_checker import csv_upload, database_upload
+from test_web_checker import csv_upload, database_upload, xlsx_upload
 
 
 class BrowserFile(io.BytesIO):
@@ -91,6 +91,35 @@ class StreamlitAppTests(unittest.TestCase):
         self.app.run()
         self.assertFalse(self.app.exception)
         self.assertIn("CHCODE header", self.app.error[0].value)
+
+    def test_database_header_after_preamble_is_ready_without_format_changes(self):
+        for make_upload, suffix in ((csv_upload, "csv"), (xlsx_upload, "xlsx")):
+            with self.subTest(format=suffix):
+                self.database = BrowserFile(make_upload(f"database.{suffix}", [
+                    ["Account database export"], [],
+                    ["Name", " cHcOdE ", "Last Name", "Email address", "OB", "PROD TYPE"],
+                    ["Alice Smith", "00123", "Smith", "alice@example.test", 1234.5, "CARDS"],
+                    ["Bob Jones", "456", "Jones", "bob@example.test", 500, "LOAN"],
+                ]))
+                self.app.run()
+                self.assertFalse(self.app.exception)
+                self.assertFalse(self.app.error)
+                self.assertFalse(self.app.button(key="run_check").disabled)
+                self.assertTrue(all(not item.value for item in self.app.checkbox
+                                    if item.label.startswith("No headers")))
+                self.app.button(key="run_check").click().run()
+                self.assertFalse(self.app.exception)
+                self.assertFalse(self.app.error)
+                run = self.app.session_state["check_run"]
+                self.assertEqual(run.database.column, "cHcOdE")
+                self.assertTrue(run.database.has_headers)
+                self.assertEqual(run.results[0].count("MATCHED"), 1)
+                self.assertEqual(run.results[0].count("DIFFERENT"), 1)
+                self.assertEqual([record[:3] for record in run.results[0].records], [
+                    (2, "MATCHED", "4"), (3, "DIFFERENT", "5"),
+                ])
+                self.assertEqual(run.results[0].flow_stage, "NO_REPLY")
+                self.assertEqual(len(self.app.get("download_button")), 1)
 
     def test_bad_target_is_reported_while_other_files_are_checked(self):
         self.files.append(BrowserFile(csv_upload("missing-key.csv", [["Other"], ["A"]])))

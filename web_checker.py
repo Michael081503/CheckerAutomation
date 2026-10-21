@@ -32,6 +32,7 @@ class Inspection:
     sheet: str
     headers: tuple[str, ...]
     column: str
+    header_row: int | None = 1
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ def inspect_upload(upload: Upload, sheet: str | None = None, *, has_headers: boo
         names = sheet_names(path)
         table = read_table(path, sheet or names[0], headers_only=True, has_headers=has_headers)
         column = next((name for name in table.headers if name.casefold() == "chcode"), "")
-        return Inspection(tuple(names), table.sheet, tuple(table.headers), column)
+        return Inspection(tuple(names), table.sheet, tuple(table.headers), column, table.header_row)
 
 
 def configuration_signature(database: UploadedSource, files: list[UploadedSource], options: Options) -> str:

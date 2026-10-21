@@ -52,7 +52,114 @@ class WebCheckerTests(unittest.TestCase):
         self.assertEqual(info.sheets, ("Accounts", "Other"))
         self.assertEqual(info.column, "CHCODE")
         self.assertEqual(info.headers[:2], ("CHCODE", "CHCode [2]"))
+        self.assertEqual(info.header_row, 1)
         self.assertEqual(inspect_upload(database_upload(), "Other").column, "")
+
+    def test_database_header_after_preamble_preserves_database_row_numbers(self):
+        for make_upload, suffix in ((csv_upload, "csv"), (xlsx_upload, "xlsx")):
+            with self.subTest(format=suffix):
+                upload = make_upload(f"database.{suffix}", [
+                    ["Database export"], [],
+                    ["Name", " cHcOdE ", "Email address"],
+                    ["Alice Smith", "00123", "alice@example.test"],
+                    ["Bob Jones", "456", "bob@example.test"],
+                ])
+                info = inspect_upload(upload)
+                self.assertEqual(info.header_row, 3)
+                self.assertEqual(info.headers, ("Name", "cHcOdE", "Email address"))
+                self.assertEqual(info.column, "cHcOdE")
+                database = UploadedSource(upload, info.sheet, info.column)
+                target = UploadedSource(csv_upload("campaign.csv", [
+                    ["CHCODE", "FLOW_STAGE"], ["00123", "MAIL"], ["456", "MAIL"],
+                ]), "CSV", "CHCODE")
+                run = run_uploaded_check(database, [target], Options(mapped_fields=True, require_flow_stage=True))
+                result = run.results[0]
+                self.assertEqual(result.verdict, "EXACT MATCH")
+                self.assertTrue(run.database.has_headers)
+                self.assertEqual([record[:3] for record in result.records], [
+                    (2, "MATCHED", "4"), (3, "MATCHED", "5"),
+                ])
+                book = load_workbook(io.BytesIO(run.report))
+                try:
+                    detail = book["File 001"]
+                    self.assertEqual(detail["C2"].value, "4")
+                    self.assertEqual(detail["C3"].value, "5")
+                    self.assertEqual(detail["D2"].value, "00123")
+                    self.assertEqual(detail["D2"].data_type, "s")
+                finally:
+                    book.close()
+
+    def test_headered_upload_after_preamble_keeps_stage_checks_and_source_rows(self):
+        for make_upload, suffix in ((csv_upload, "csv"), (xlsx_upload, "xlsx")):
+            with self.subTest(format=suffix):
+                upload = make_upload(f"campaign.{suffix}", [
+                    ["Campaign export"], [],
+                    ["Name", " chCODE ", "FLOW_STAGE"],
+                    ["Alice Smith", "00123", "NO_REPLY"],
+                    ["Changed Name", "456", "NO_REPLY"],
+                ])
+                info = inspect_upload(upload)
+                self.assertEqual(info.header_row, 3)
+                self.assertEqual(info.headers, ("Name", "chCODE", "FLOW_STAGE"))
+                source = UploadedSource(upload, info.sheet, info.column)
+                run = run_uploaded_check(self.database(), [source], Options(mapped_fields=True, require_flow_stage=True))
+                result = run.results[0]
+                self.assertFalse(result.error)
+                self.assertTrue(result.flow_stage_required)
+                self.assertEqual(result.flow_stage, "NO_REPLY")
+                self.assertEqual([record[:3] for record in result.records], [
+                    (4, "MATCHED", "2"), (5, "DIFFERENT", "3"),
+                ])
+                book = load_workbook(io.BytesIO(run.report))
+                try:
+                    detail = book["File 001"]
+                    self.assertEqual(detail["A2"].value, 4)
+                    self.assertEqual(detail["A3"].value, 5)
+                    self.assertEqual(detail["E2"].value, "00123")
+                    self.assertEqual(book["Differences 001"]["A2"].value, 5)
+                    self.assertEqual(book["Differences 001"]["B2"].value, 3)
+                finally:
+                    book.close()
+
+                missing_stage = make_upload(f"missing_stage.{suffix}", [
+                    ["Campaign export"], [], ["Name", "CHCODE"], ["Alice Smith", "00123"],
+                ])
+                invalid = UploadedSource(missing_stage, info.sheet, "CHCODE")
+                invalid_run = run_uploaded_check(self.database(), [invalid], Options(mapped_fields=True, require_flow_stage=True))
+                self.assertEqual(invalid_run.results[0].verdict, "ERROR")
+                self.assertIn("FLOW_STAGE", invalid_run.results[0].error)
+
+    def test_headerless_column_b_upload_matches_a_database_with_preamble(self):
+        for make_upload, suffix in ((csv_upload, "csv"), (xlsx_upload, "xlsx")):
+            with self.subTest(format=suffix):
+                database_upload = make_upload(f"database.{suffix}", [
+                    ["Database export"], [], ["Name", "CHCODE"],
+                    ["Alice Smith", "00123"], ["Bob Jones", "456"],
+                ])
+                database_info = inspect_upload(database_upload)
+                database = UploadedSource(database_upload, database_info.sheet, database_info.column)
+                upload = make_upload(f"headerless.{suffix}", [
+                    ["First account", "00123"], ["Second account", "456"],
+                ])
+                info = inspect_upload(upload, has_headers=False)
+                self.assertIsNone(info.header_row)
+                source = UploadedSource(upload, info.sheet, info.column, has_headers=False)
+                run = run_uploaded_check(database, [source], Options(mapped_fields=True, require_flow_stage=True))
+                result = run.results[0]
+                self.assertEqual(result.verdict, "MAPPED ROWS MATCH")
+                self.assertFalse(result.flow_stage_required)
+                self.assertEqual([record[:3] for record in result.records], [
+                    (1, "MATCHED", "4"), (2, "MATCHED", "5"),
+                ])
+                book = load_workbook(io.BytesIO(run.report))
+                try:
+                    detail = book["File 001"]
+                    self.assertEqual(detail["A2"].value, 1)
+                    self.assertEqual(detail["C2"].value, "4")
+                    self.assertEqual(detail["E2"].value, "00123")
+                    self.assertEqual(detail["E2"].data_type, "s")
+                finally:
+                    book.close()
 
     def test_browser_uploads_generate_a_downloadable_report(self):
         first = csv_upload("campaign.csv", [

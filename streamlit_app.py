@@ -260,12 +260,13 @@ def main():
                                                key=f"database_sheet_{database_upload.fingerprint}") if len(base.sheets) > 1 else base.sheet
                 database_info = inspection(database_upload, database_sheet)
                 if not database_info.column:
-                    database_error = "The selected database worksheet must have a CHCODE header in row 1."
+                    database_error = "The selected database worksheet must have a CHCODE header."
             except Exception as error:
                 database_error = str(error)
         for index, upload in enumerate(file_uploads):
             has_headers = not st.checkbox(f"No headers (CHCODE in column B): {upload.name}",
-                                           key=f"headerless_{index}_{upload.fingerprint}")
+                                           key=f"headerless_{index}_{upload.fingerprint}",
+                                           help="Leave unchecked when a CHCODE header exists, even below the first row. Select only when every row is data and CHCODE values are in column B.")
             try:
                 base = inspection(upload, has_headers=has_headers)
                 sheet = st.selectbox(f"Worksheet: {upload.name}", base.sheets,
@@ -281,10 +282,12 @@ def main():
                 else:
                     status = "Ready"
                     layouts[(info.headers, info.column, has_headers)].append(index)
-                file_summary.append({"File": upload.name, "Worksheet": sheet, "Status": status})
+                file_summary.append({"File": upload.name, "Worksheet": sheet,
+                                     "Header row": str(info.header_row) if info.header_row is not None else "No headers",
+                                     "Status": status})
             except Exception as error:
                 source = UploadedSource(upload, "", "CHCODE", has_headers=has_headers)
-                file_summary.append({"File": upload.name, "Worksheet": "", "Status": str(error)})
+                file_summary.append({"File": upload.name, "Worksheet": "", "Header row": "", "Status": str(error)})
             sources.append(source)
         if file_summary:
             st.dataframe(file_summary, hide_index=True, width="stretch")
@@ -296,9 +299,12 @@ def main():
                 for index in indices:
                     sources[index] = replace(sources[index], mappings=mappings)
         st.caption("Files with headers need one FLOW_STAGE value, such as NO_REPLY. Headerless files use column B as CHCODE, include row 1, and are identified by filename.")
+        st.caption("The first row containing a CHCODE header is detected automatically; rows above it are skipped. Leave No headers unchecked when the header appears below the first row.")
         st.caption("Headerless files check CHCODE only by default. Edit comparison fields to map other columns. The database still needs headers.")
         st.caption("Uploads are processed on the app server in this session. Start over clears the current uploads and results.")
 
+    if database_info and not database_error:
+        st.caption(f"Database: CHCODE header found on row {database_info.header_row}.")
     if database_error:
         reset_results()
         st.error(f"Database: {database_error}")

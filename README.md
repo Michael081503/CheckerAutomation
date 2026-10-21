@@ -33,6 +33,8 @@ Uploaded data is processed on the app server. Each browser session keeps its own
 
 Optional settings stay under **Advanced options**: choose worksheets, change the comparison mode, or use **Edit comparison fields** to adjust mappings. Files with the same column layout and header setting share a mapping table. CHCODE lookup is always retained; files with headers also retain FLOW_STAGE identification.
 
+The database and uploaded files can have titles, notes, or blank rows above their column headers. The app automatically uses the first row containing a `CHCODE` header, ignoring letter case and outer spaces, and skips the rows above it. It displays the detected database header row and lists each uploaded file's header row under **Advanced options**. Leave **No headers (CHCODE in column B)** unchecked when a `CHCODE` header exists below the first row. Source row numbers in results and reports retain their original positions.
+
 For a file without column headers, open **Advanced options** and select **No headers (CHCODE in column B)** for that file. The app reads column B as CHCODE and includes the first row as data. It checks CHCODE values against the database by default; other columns appear as `Column A`, `Column C`, and so on, and stay **NOT CHECKED** until you map them in **Edit comparison fields**. Headerless files are identified by filename and do not need a FLOW_STAGE column. Successful checks show **MAPPED ROWS MATCH**, covering only the selected fields. This option supports uploaded-row validation; the database still needs its original column headers, including CHCODE.
 
 Uploaded-row results:
@@ -92,7 +94,7 @@ Identical rows are paired first. Remaining rows with the same CHCODE are paired 
 
 ## File and matching rules
 
-- Row 1 must contain column headers unless **No headers (CHCODE in column B)** is selected for an uploaded file. With headers, later repeated names get visible suffixes, such as `CHCode [2]` or `blank [2]`; every column and its values are preserved. The first `CHCODE` column is the default key. Header comparisons ignore letter case and outer spaces.
+- Column headers are detected on the first row containing a `CHCODE` header; titles, notes, and blank rows above it are skipped. Each data column needs a name on that header row. Select **No headers (CHCODE in column B)** only for uploaded files without headers. With headers, later repeated names get visible suffixes, such as `CHCode [2]` or `blank [2]`; every column and its values are preserved. The first `CHCODE` column is the default key. Header comparisons ignore letter case and outer spaces.
 - Ignore letter case and trim outer spaces are enabled by default for text. Disable them for case-sensitive values and significant spaces. Product-family aliases are recognized without case differences.
 - Text CHCODE `00123` remains distinct from `123`. Store codes as text when leading zeros matter; zeros shown only by Excel number formatting are not part of the stored value.
 - Numeric Excel `123` and `123.0` match text `123`. CHCODEs always use text comparison rules.

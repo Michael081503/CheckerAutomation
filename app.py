@@ -222,7 +222,8 @@ class CheckerApp(tk.Tk):
         table = read_table(path, sheet or names[0])
         column = next((name for name in table.headers if name.casefold() == "chcode"), "")
         return {"path": Path(path), "sheet": table.sheet, "sheets": names,
-                "column": column, "headers": table.headers, "rows": len(table.rows), "error": "" if column else "Missing CHCODE header"}
+                "column": column, "headers": table.headers, "header_row": table.header_row,
+                "rows": len(table.rows), "error": "" if column else "Missing CHCODE header"}
 
     def _set_database(self, data):
         self.database = data
@@ -232,9 +233,9 @@ class CheckerApp(tk.Tk):
         self.db_sheet.configure(values=data['sheets'])
         self.db_sheet.set(data['sheet'])
         self._invalidate()
-        self.status.set(data['error'] or f"Database ready: {data['rows']:,} rows. Add files to check.")
+        self.status.set(data['error'] or f"Database ready: CHCODE header found on row {data['header_row']}; {data['rows']:,} data rows. Add files to check.")
         if data['error']:
-            messagebox.showwarning("CHCODE header required", "The selected database worksheet must have a CHCODE header in row 1. Choose another worksheet or correct the file.", parent=self)
+            messagebox.showwarning("CHCODE header required", "The selected database worksheet must have a CHCODE header. Headers below the first row are detected automatically. Choose another worksheet or correct the file.", parent=self)
 
     def _choose_database(self):
         path = filedialog.askopenfilename(title="Choose the CHCODE database", filetypes=FILE_TYPES, parent=self)

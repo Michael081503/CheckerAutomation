@@ -109,6 +109,47 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(sheet_names(path), ["Other", "Codes"])
         self.assertEqual(read_table(path, "Codes").headers, ["CHCODE"])
 
+    def test_chcode_header_is_detected_below_title_and_blank_rows(self):
+        rows = [["Account report"], [], ["Name", " chcode "], ["Alice", "00123"], [], ["Bob", "456"]]
+        sources = [(self.csv("preamble.csv", rows), "CSV"),
+                   (self.excel("preamble.xlsx", {"Accounts": rows}), "Accounts")]
+        for path, sheet in sources:
+            with self.subTest(format=path.suffix):
+                table = read_table(path, sheet)
+                self.assertEqual(table.header_row, 3)
+                self.assertEqual(table.headers, ["Name", "chcode"])
+                self.assertEqual(table.rows, [(4, ("Alice", "00123")), (6, ("Bob", "456"))])
+                info = read_table(path, sheet, headers_only=True)
+                self.assertEqual((info.header_row, info.headers, info.rows), (3, table.headers, []))
+
+    def test_csv_preamble_does_not_break_delimiter_detection(self):
+        for index, delimiter in enumerate([",", ";", "\t", "|"]):
+            with self.subTest(delimiter=delimiter):
+                path = self.csv(f"preamble_{index}.csv", [
+                    ["Account report"], [], ["Name", "CHCODE"], ["Alice", "00123"],
+                ], delimiter=delimiter)
+                table = read_table(path)
+                self.assertEqual(table.header_row, 3)
+                self.assertEqual(table.headers, ["Name", "CHCODE"])
+                self.assertEqual(table.rows, [(4, ("Alice", "00123"))])
+
+    def test_delayed_database_and_target_headers_keep_original_row_numbers(self):
+        database = self.csv("delayed_db.csv", [
+            ["Database export"], [], ["Name", "CHCODE"], ["Alice", "00123"],
+        ])
+        target = self.csv("delayed_target.csv", [
+            ["Campaign export"], [], [], [], ["Name", "CHCODE"], ["Alice", "00123"],
+        ])
+        result = check_files(self.source(database), [self.source(target)], Options(mapped_fields=True))[0]
+        self.assertFalse(result.error)
+        self.assertEqual(result.records, [(6, "MATCHED", "4", ("Alice", "00123"))])
+
+    def test_explicit_headerless_mode_does_not_skip_a_data_value_named_chcode(self):
+        path = self.csv("no_headers.csv", [["First", "00123"], ["Second", "CHCODE"]])
+        table = read_table(path, has_headers=False)
+        self.assertIsNone(table.header_row)
+        self.assertEqual(table.rows, [(1, ("First", "00123")), (2, ("Second", "CHCODE"))])
+
     def test_cancellation(self):
         db = self.csv("db.csv", [["CHCODE"], ["A"]])
         with self.assertRaises(Cancelled):

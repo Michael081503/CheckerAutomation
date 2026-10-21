@@ -22,6 +22,7 @@ class Table:
     sheet: str
     headers: list[str]
     rows: list[tuple[int, tuple]]
+    header_row: int | None = 1
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,12 @@ def sheet_names(path: Path) -> list[str]:
         book.close()
 
 
-def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True) -> Table:
+def _has_chcode(values: Iterable) -> bool:
+    return any(str(value).strip().casefold() == "chcode" for value in values if value is not None)
+
+
+def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
+           headers_only: bool = False) -> Table:
     iterator = iter(rows)
     first = next(iterator, None)
     if first is None:
@@ -129,13 +135,27 @@ def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True) 
         headers = ["CHCODE" if index == 2 else f"Column {get_column_letter(index)}"
                    for index in range(1, width + 1)]
         return Table(path, sheet, headers,
-                     [(number, values + (None,) * (width - len(values))) for number, values in records])
+                     [] if headers_only else
+                     [(number, values + (None,) * (width - len(values))) for number, values in records],
+                     header_row=None)
+    header_row = 1
+    if not _has_chcode(first):
+        preamble = []
+        for number, values in enumerate(iterator, 2):
+            if _has_chcode(values):
+                first = values
+                header_row = number
+                break
+            preamble.append(values)
+        else:
+            # Keep the generic reader's missing-key behavior when CHCODE is absent.
+            iterator = iter(preamble)
     # Keep internal empty headers so column positions never shift.
     headers = [str(value).strip() if value is not None else "" for value in first]
     while headers and not headers[-1]:
         headers.pop()
     if not headers or any(not header for header in headers):
-        raise ValueError(f"{path.name}: row 1 must contain a name for every data column.")
+        raise ValueError(f"{path.name}: header row {header_row} must contain a name for every data column.")
     # Real database exports repeat names. Preserve every position and give later
     # occurrences visible suffixes; the first CHCODE remains the primary key.
     used = set()
@@ -148,13 +168,15 @@ def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True) 
         headers[index] = candidate
         used.add(candidate.casefold())
     records = []
-    for number, values in enumerate(iterator, 2):
+    if headers_only:
+        return Table(path, sheet, headers, records, header_row=header_row)
+    for number, values in enumerate(iterator, header_row + 1):
         values = tuple(values)
         if any(value is not None and str(value).strip() for value in values):
             if any(value is not None and str(value).strip() for value in values[len(headers):]):
                 raise ValueError(f"{path.name}: row {number} contains data under an unnamed column.")
             records.append((number, values[:len(headers)] + (None,) * max(0, len(headers) - len(values))))
-    return Table(path, sheet, headers, records)
+    return Table(path, sheet, headers, records, header_row=header_row)
 
 
 def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = False,
@@ -171,23 +193,25 @@ def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = Fal
         except csv.Error:
             dialect = csv.excel
         import io
-        reader = csv.reader(io.StringIO(contents, newline=""), dialect)
-        table = _table(path, "CSV", [next(reader, ())] if headers_only and has_headers else reader,
-                       has_headers=has_headers)
-        if headers_only:
-            table.rows = []
-        return table
+        delimiter = dialect.delimiter
+        if has_headers:
+            # Preambles with different row widths can defeat Sniffer. Recover
+            # the delimiter using the actual CHCODE header, including later rows.
+            candidates = [delimiter, *(value for value in ",;\t|" if value != delimiter)]
+            for candidate in candidates:
+                probe = csv.reader(io.StringIO(contents, newline=""), dialect, delimiter=candidate)
+                if any(_has_chcode(values) for values in probe):
+                    delimiter = candidate
+                    break
+        reader = csv.reader(io.StringIO(contents, newline=""), dialect, delimiter=delimiter)
+        return _table(path, "CSV", reader, has_headers=has_headers, headers_only=headers_only)
     book = load_workbook(path, read_only=True, data_only=True)
     try:
         selected = sheet or book.sheetnames[0]
         if selected not in book.sheetnames:
             raise ValueError(f"Sheet '{selected}' no longer exists in {path.name}.")
         reader = book[selected].iter_rows(values_only=True)
-        table = _table(path, selected, [next(reader, ())] if headers_only and has_headers else reader,
-                       has_headers=has_headers)
-        if headers_only:
-            table.rows = []
-        return table
+        return _table(path, selected, reader, has_headers=has_headers, headers_only=headers_only)
     finally:
         book.close()
 
@@ -348,7 +372,7 @@ def check_files(database: Source, files: list[Source], options: Options,
                 progress: Callable[[int, int, FileResult], None] | None = None,
                 cancelled: Callable[[], bool] = lambda: False) -> list[FileResult]:
     if not database.has_headers:
-        raise ValueError("The database must have column headers, including CHCODE, in row 1.")
+        raise ValueError("The database must have a header row containing CHCODE.")
     table = read_table(database.path, database.sheet)
     if database.column not in table.headers:
         raise ValueError(f"Database column '{database.column}' no longer exists.")

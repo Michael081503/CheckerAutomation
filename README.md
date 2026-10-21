@@ -1,6 +1,6 @@
 ﻿# CHCODE Database Checker
 
-A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. `FLOW_STAGE` identifies each uploaded file, and `CHCODE` locates each corresponding database row. The app compares mapped fields and provides an Excel report download. It is prepared for Streamlit Community Cloud.
+A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. `FLOW_STAGE` identifies files with headers; headerless files use their filenames. `CHCODE` locates each corresponding database row. The app compares mapped fields and provides an Excel report download. It is prepared for Streamlit Community Cloud.
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. Advanced settings stay collapsed by default.
 
@@ -26,12 +26,14 @@ Uploaded data is processed on the app server. Each browser session keeps its own
 ## Check your files
 
 1. Add the database `.xlsx`, `.xlsm`, or `.csv` file in **Add your database**.
-2. Add multiple files in **Add files to check**. Each file needs one consistent, nonblank `FLOW_STAGE` identifier.
+2. Add multiple files in **Add files to check**. Files with headers need one consistent, nonblank `FLOW_STAGE` identifier. For headerless files, select the column B option described below.
 3. Click **Check files**. The default settings compare your uploaded rows against the database; smaller campaign subsets are supported.
 4. Read the compact results, then expand a file to see its **Issues**, **Rows**, or **Fields checked**. Row previews default to entries needing review when issues exist.
 5. Click **Download Excel report** for every original row, changed value, and field mapping.
 
-Optional settings stay under **Advanced options**: choose worksheets, change the comparison mode, or use **Edit comparison fields** to adjust mappings. Files with the same column layout share a mapping table. CHCODE lookup and FLOW_STAGE identification are always retained.
+Optional settings stay under **Advanced options**: choose worksheets, change the comparison mode, or use **Edit comparison fields** to adjust mappings. Files with the same column layout and header setting share a mapping table. CHCODE lookup is always retained; files with headers also retain FLOW_STAGE identification.
+
+For a file without column headers, open **Advanced options** and select **No headers (CHCODE in column B)** for that file. The app reads column B as CHCODE and includes the first row as data. It checks CHCODE values against the database by default; other columns appear as `Column A`, `Column C`, and so on, and stay **NOT CHECKED** until you map them in **Edit comparison fields**. Headerless files are identified by filename and do not need a FLOW_STAGE column. Successful checks show **MAPPED ROWS MATCH**, covering only the selected fields. This option supports uploaded-row validation; the database still needs its original column headers, including CHCODE.
 
 Uploaded-row results:
 
@@ -46,7 +48,7 @@ A file receives **EXACT MATCH** only when all its uploaded rows match across the
 
 `FLOW_STAGE` labels the uploaded file; it is not a field that needs to exist in the database. For example, a file with `FLOW_STAGE=NO_REPLY` is identified as **NO_REPLY**, then each row is checked against its database record using `CHCODE`. The label alone never causes a file to pass.
 
-The supplied files use `NO_REPLY`, `NEW_ENDO`, and `SHORT_TERM_ARRANGEMENT`. All three currently use the same row-comparison rule. Every row in one uploaded file must have the same stage; missing headers, blank stages, or mixed stages produce a file error. Header letter case is ignored, and stage labels are displayed in uppercase.
+The supplied files use `NO_REPLY`, `NEW_ENDO`, and `SHORT_TERM_ARRANGEMENT`. All three currently use the same row-comparison rule. In files with headers, every row must have the same stage; missing headers, blank stages, or mixed stages produce a file error. Header letter case is ignored, and stage labels are displayed in uppercase. Headerless uploads use their filenames as identifiers instead.
 
 The result summary and Excel summary show each file's stage. Field coverage marks `FLOW_STAGE` as **FILE IDENTIFIER**. It is excluded from database field mappings and is preserved in the exported source rows. An exact match covers the selected database fields; campaign-only columns without mappings remain unchecked.
 
@@ -90,7 +92,7 @@ Identical rows are paired first. Remaining rows with the same CHCODE are paired 
 
 ## File and matching rules
 
-- Row 1 must contain column headers. Later repeated names get visible suffixes, such as `CHCode [2]` or `blank [2]`; every column and its values are preserved. The first `CHCODE` column is the default key. Header comparisons ignore letter case and outer spaces.
+- Row 1 must contain column headers unless **No headers (CHCODE in column B)** is selected for an uploaded file. With headers, later repeated names get visible suffixes, such as `CHCode [2]` or `blank [2]`; every column and its values are preserved. The first `CHCODE` column is the default key. Header comparisons ignore letter case and outer spaces.
 - Ignore letter case and trim outer spaces are enabled by default for text. Disable them for case-sensitive values and significant spaces. Product-family aliases are recognized without case differences.
 - Text CHCODE `00123` remains distinct from `123`. Store codes as text when leading zeros matter; zeros shown only by Excel number formatting are not part of the stored value.
 - Numeric Excel `123` and `123.0` match text `123`. CHCODEs always use text comparison rules.

@@ -17,6 +17,18 @@ def csv_upload(name, rows):
     return Upload(name, stream.getvalue().encode("utf-8-sig"))
 
 
+def xlsx_upload(name, rows):
+    stream = io.BytesIO()
+    book = Workbook()
+    try:
+        for row in rows:
+            book.active.append(row)
+        book.save(stream)
+    finally:
+        book.close()
+    return Upload(name, stream.getvalue())
+
+
 def database_upload():
     stream = io.BytesIO()
     book = Workbook()
@@ -87,6 +99,86 @@ class WebCheckerTests(unittest.TestCase):
         self.assertEqual(run.results[0].count("MATCHED"), 1)
         self.assertEqual(run.results[0].mappings, list(mappings))
 
+    def test_headerless_uploads_preserve_first_row_keys_and_report_values(self):
+        for make_upload, suffix in ((csv_upload, "csv"), (xlsx_upload, "xlsx")):
+            with self.subTest(format=suffix):
+                upload = make_upload(f"headerless.{suffix}", [
+                    ["", "00123", "Original first row"],
+                    ["Unknown account", "00999", "Keep this value"],
+                    ["Blank account", "", "Flag this row"],
+                ])
+                info = inspect_upload(upload, has_headers=False)
+                self.assertEqual(info.headers, ("Column A", "CHCODE", "Column C"))
+                self.assertEqual(info.column, "CHCODE")
+                source = UploadedSource(upload, info.sheet, info.column, has_headers=False)
+                run = run_uploaded_check(self.database(), [source], Options(mapped_fields=True, require_flow_stage=True))
+                result = run.results[0]
+                self.assertFalse(result.error)
+                self.assertFalse(result.source.has_headers)
+                self.assertEqual([record[:3] for record in result.records], [
+                    (1, "MATCHED", "2"), (2, "NOT FOUND", ""), (3, "BLANK KEY", ""),
+                ])
+                self.assertEqual(result.records[0][3][1:], ("00123", "Original first row"))
+                self.assertEqual(result.records[1][3], ("Unknown account", "00999", "Keep this value"))
+                self.assertEqual(result.mappings, [ColumnMapping("CHCODE", "CHCODE")])
+                book = load_workbook(io.BytesIO(run.report))
+                try:
+                    detail = book["File 001"]
+                    self.assertEqual(tuple(cell.value for cell in detail[1]),
+                                     ("Source row", "Result", "Database row(s)", "Column A", "CHCODE", "Column C"))
+                    self.assertEqual(detail["A2"].value, 1)
+                    self.assertIsNone(detail["D2"].value)
+                    self.assertEqual(detail["E2"].value, "00123")
+                    self.assertEqual(detail["E2"].data_type, "s")
+                    self.assertEqual(detail["F2"].value, "Original first row")
+                    self.assertEqual(detail["A3"].value, 2)
+                    self.assertEqual(detail["D3"].value, "Unknown account")
+                    self.assertEqual(detail["E3"].value, "00999")
+                    self.assertEqual(detail["A4"].value, 3)
+                    self.assertEqual(detail["B4"].value, "BLANK KEY")
+                    self.assertEqual(book["Summary"]["B9"].value, upload.name)
+                finally:
+                    book.close()
+
+    def test_mixed_uploads_keep_flow_stage_validation_for_headered_files(self):
+        headered = UploadedSource(csv_upload("campaign.csv", [
+            ["CHCODE", "FLOW_STAGE"], ["00123", "MAIL"],
+        ]), "CSV", "CHCODE")
+        headerless = UploadedSource(csv_upload("without_headers.csv", [
+            ["Other data", "456"],
+        ]), "CSV", "CHCODE", has_headers=False)
+        missing_stage = UploadedSource(csv_upload("missing_stage.csv", [
+            ["CHCODE"], ["456"],
+        ]), "CSV", "CHCODE")
+        run = run_uploaded_check(self.database(), [headered, headerless, missing_stage],
+                                 Options(mapped_fields=True, require_flow_stage=True))
+        self.assertEqual(run.results[0].verdict, "EXACT MATCH")
+        self.assertEqual(run.results[0].flow_stage, "MAIL")
+        self.assertEqual(run.results[1].verdict, "MAPPED ROWS MATCH")
+        self.assertFalse(run.results[1].flow_stage_required)
+        self.assertEqual(run.results[1].source.path.name, "without_headers.csv")
+        self.assertEqual(run.results[1].records[0][0], 1)
+        self.assertEqual(run.results[2].verdict, "ERROR")
+        self.assertIn("FLOW_STAGE", run.results[2].error)
+
+    def test_headerless_uploads_require_column_b(self):
+        for make_upload, suffix in ((csv_upload, "csv"), (xlsx_upload, "xlsx")):
+            with self.subTest(format=suffix):
+                upload = make_upload(f"one_column.{suffix}", [["00123"], ["456"]])
+                with self.assertRaisesRegex(ValueError, "[Cc]olumn B"):
+                    inspect_upload(upload, has_headers=False)
+                sheet = "CSV" if suffix == "csv" else "Sheet"
+                run = run_uploaded_check(self.database(), [UploadedSource(upload, sheet, "CHCODE", has_headers=False)],
+                                         Options(mapped_fields=True))
+                self.assertEqual(run.results[0].verdict, "ERROR")
+                self.assertRegex(run.results[0].error, "[Cc]olumn B")
+
+    def test_database_still_requires_headers(self):
+        database = UploadedSource(csv_upload("database.csv", [["meta", "00123"]]), "CSV", "CHCODE", has_headers=False)
+        target = UploadedSource(csv_upload("target.csv", [["CHCODE"], ["00123"]]), "CSV", "CHCODE")
+        with self.assertRaisesRegex(ValueError, "[Dd]atabase.*[Hh]eader"):
+            run_uploaded_check(database, [target], Options(mapped_fields=True))
+
     def test_input_or_option_changes_invalidate_signature(self):
         database = self.database()
         first = UploadedSource(csv_upload("file.csv", [["CHCODE"], ["00123"]]), "CSV", "CHCODE")
@@ -96,6 +188,8 @@ class WebCheckerTests(unittest.TestCase):
         self.assertNotEqual(signature, configuration_signature(database, [first], Options(False, True, True)))
         changed_mapping = UploadedSource(first.upload, first.sheet, first.column, (ColumnMapping("CHCODE", "CHCODE"),))
         self.assertNotEqual(signature, configuration_signature(database, [changed_mapping], Options(mapped_fields=True)))
+        changed_headers = UploadedSource(first.upload, first.sheet, first.column, has_headers=False)
+        self.assertNotEqual(signature, configuration_signature(database, [changed_headers], Options(mapped_fields=True)))
 
     def test_temporary_uploads_are_removed_after_success_and_failure(self):
         original = tempfile.TemporaryDirectory

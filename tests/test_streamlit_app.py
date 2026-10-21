@@ -122,3 +122,42 @@ class StreamlitAppTests(unittest.TestCase):
         result = self.app.session_state["check_run"].results[0]
         self.assertEqual(result.verdict, "ERROR")
         self.assertIn("FLOW_STAGE", result.error)
+
+    def test_headerless_file_checks_column_b_and_format_toggle_clears_results(self):
+        self.files = [BrowserFile(csv_upload("no_headers.csv", [
+            ["First row", "00123", "Unmapped value"],
+            ["Second row", "00999", "Another value"],
+            ["Blank key", "", "Still a data row"],
+        ]))]
+        self.app.run()
+        headerless = next(item for item in self.app.checkbox if item.label.startswith("No headers"))
+        key = headerless.key
+        headerless.check().run()
+        self.assertFalse(self.app.exception)
+        self.app.button(key="run_check").click().run()
+        self.assertFalse(self.app.exception)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertFalse(result.error)
+        self.assertFalse(result.source.has_headers)
+        self.assertEqual([(row[0], row[1]) for row in result.records],
+                         [(1, "MATCHED"), (2, "NOT FOUND"), (3, "BLANK KEY")])
+        self.assertEqual(result.records[0][3], ("First row", "00123", "Unmapped value"))
+        self.assertEqual([item.file_column for item in result.mappings], ["CHCODE"])
+        self.assertEqual(result.ignored_columns, ["Column A", "Column C"])
+        self.assertFalse(result.flow_stage_required)
+        self.assertEqual(len(self.app.get("download_button")), 1)
+        self.app.checkbox(key=key).uncheck().run()
+        self.assertFalse(self.app.exception)
+        self.assertNotIn("check_run", self.app.session_state)
+        self.assertEqual(len(self.app.get("download_button")), 0)
+
+    def test_headerless_full_copy_is_a_readable_file_error(self):
+        self.files = [BrowserFile(csv_upload("no_headers.csv", [["First row", "00123"]]))]
+        self.app.run()
+        next(item for item in self.app.checkbox if item.label.startswith("No headers")).check().run()
+        self.app.selectbox(key="check_mode").select("Compare complete database copy").run()
+        self.app.button(key="run_check").click().run()
+        self.assertFalse(self.app.exception)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual(result.verdict, "ERROR")
+        self.assertIn("uploaded-row", result.error)

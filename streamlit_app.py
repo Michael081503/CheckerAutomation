@@ -24,11 +24,11 @@ def clear_session():
     st.session_state.upload_epoch = epoch
 
 
-def inspection(upload, sheet=None):
+def inspection(upload, sheet=None, *, has_headers=True):
     cache = st.session_state.setdefault("inspections", {})
-    key = (upload.fingerprint, sheet)
+    key = (upload.fingerprint, sheet, has_headers)
     if key not in cache:
-        cache[key] = inspect_upload(upload, sheet)
+        cache[key] = inspect_upload(upload, sheet, has_headers=has_headers)
     return cache[key]
 
 
@@ -74,9 +74,9 @@ def apply_style():
 """, unsafe_allow_html=True)
 
 
-def mapping_editor(headers, file_key, database_info, layout_id, count):
+def mapping_editor(headers, file_key, database_info, layout_id, count, *, has_headers=True):
     suggested = {item.file_column: item for item in suggest_mappings(
-        list(headers), list(database_info.headers), file_key, database_info.column)}
+        list(headers), list(database_info.headers), file_key, database_info.column)} if has_headers else {}
     identifier = find_header(headers, "FLOW_STAGE")
     rows = []
     for header in headers:
@@ -86,7 +86,8 @@ def mapping_editor(headers, file_key, database_info, layout_id, count):
         rows.append({"File column": header, "Database column": item.database_column if item else SKIP,
                      "Compare as": item.comparison if item else "Text"})
     with st.popover(f"Edit comparison fields · {count} file(s)", width="stretch"):
-        st.caption("CHCODE finds the database row. FLOW_STAGE identifies the file.")
+        st.caption("CHCODE in column B finds the database row. Other columns are unchecked until mapped."
+                   if not has_headers else "CHCODE finds the database row. FLOW_STAGE identifies the file.")
         edited = st.data_editor(
             rows, hide_index=True, num_rows="fixed", disabled=["File column"],
             column_config={
@@ -168,7 +169,9 @@ def render_file_details(result, run, index):
                 equivalent = find_header(result.database_headers, name)
                 coverage.append({"File column": name, "Database column": equivalent,
                                  "Coverage": "CHECKED" if equivalent else "EXTRA COLUMN"})
-        st.caption("Exact match refers to the compared fields. Unmapped campaign fields are not checked.")
+        st.caption("Only CHCODE in column B is checked by default for headerless files. Unmapped columns are not checked."
+                   if not result.source.has_headers else
+                   "Exact match refers to the compared fields. Unmapped campaign fields are not checked.")
         st.dataframe(coverage, hide_index=True, width="stretch")
 
 
@@ -192,7 +195,8 @@ def render_results(run):
                                     [len(results), matched, review_count]):
         column.metric(label, f"{value:,}")
     for index, result in enumerate(results):
-        status = "Exact match" if result.verdict in PASSED else "File error" if result.error else "Review needed"
+        status = ("Mapped fields match" if result.verdict == "MAPPED ROWS MATCH" else
+                  "Exact match" if result.verdict in PASSED else "File error" if result.error else "Review needed")
         stage = result.flow_stage or result.source.path.name
         label = f"{stage} · {status}"
         if not result.error:
@@ -260,34 +264,39 @@ def main():
             except Exception as error:
                 database_error = str(error)
         for index, upload in enumerate(file_uploads):
+            has_headers = not st.checkbox(f"No headers (CHCODE in column B): {upload.name}",
+                                           key=f"headerless_{index}_{upload.fingerprint}")
             try:
-                base = inspection(upload)
+                base = inspection(upload, has_headers=has_headers)
                 sheet = st.selectbox(f"Worksheet: {upload.name}", base.sheets,
                                      key=f"file_sheet_{index}_{upload.fingerprint}") if len(base.sheets) > 1 else base.sheet
-                info = inspection(upload, sheet)
-                source = UploadedSource(upload, sheet, info.column or "CHCODE")
+                info = inspection(upload, sheet, has_headers=has_headers)
+                source = UploadedSource(upload, sheet, info.column or "CHCODE", has_headers=has_headers)
                 if not info.column:
                     status = "Missing CHCODE header"
-                elif not find_header(info.headers, "FLOW_STAGE"):
+                elif not has_headers and mode == FULL_COPY:
+                    status = "Headerless files need uploaded-row comparison"
+                elif has_headers and not find_header(info.headers, "FLOW_STAGE"):
                     status = "Missing FLOW_STAGE header"
                 else:
                     status = "Ready"
-                    layouts[(info.headers, info.column)].append(index)
+                    layouts[(info.headers, info.column, has_headers)].append(index)
                 file_summary.append({"File": upload.name, "Worksheet": sheet, "Status": status})
             except Exception as error:
-                source = UploadedSource(upload, "", "CHCODE")
+                source = UploadedSource(upload, "", "CHCODE", has_headers=has_headers)
                 file_summary.append({"File": upload.name, "Worksheet": "", "Status": str(error)})
             sources.append(source)
         if file_summary:
             st.dataframe(file_summary, hide_index=True, width="stretch")
         mapped_fields = mode == UPLOADED_ROWS
         if mapped_fields and database_info and not database_error:
-            for (headers, file_key), indices in layouts.items():
-                layout_id = hashlib.sha256(repr((database_upload.fingerprint, database_sheet, headers, file_key)).encode("utf-8")).hexdigest()
-                mappings = mapping_editor(headers, file_key, database_info, layout_id, len(indices))
+            for (headers, file_key, has_headers), indices in layouts.items():
+                layout_id = hashlib.sha256(repr((database_upload.fingerprint, database_sheet, headers, file_key, has_headers)).encode("utf-8")).hexdigest()
+                mappings = mapping_editor(headers, file_key, database_info, layout_id, len(indices), has_headers=has_headers)
                 for index in indices:
                     sources[index] = replace(sources[index], mappings=mappings)
-        st.caption("Each file needs one FLOW_STAGE value, such as NO_REPLY. The database only needs CHCODE and the fields being compared.")
+        st.caption("Files with headers need one FLOW_STAGE value, such as NO_REPLY. Headerless files use column B as CHCODE, include row 1, and are identified by filename.")
+        st.caption("Headerless files check CHCODE only by default. Edit comparison fields to map other columns. The database still needs headers.")
         st.caption("Uploads are processed on the app server in this session. Start over clears the current uploads and results.")
 
     if database_error:

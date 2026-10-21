@@ -40,6 +40,7 @@ class UploadedSource:
     sheet: str
     column: str
     mappings: tuple[ColumnMapping, ...] | None = None
+    has_headers: bool = True
 
 
 @dataclass
@@ -65,11 +66,11 @@ def _write_upload(directory: Path, upload: Upload) -> Path:
     return path
 
 
-def inspect_upload(upload: Upload, sheet: str | None = None) -> Inspection:
+def inspect_upload(upload: Upload, sheet: str | None = None, *, has_headers: bool = True) -> Inspection:
     with tempfile.TemporaryDirectory(prefix="chcode_inspect_") as folder:
         path = _write_upload(Path(folder), upload)
         names = sheet_names(path)
-        table = read_table(path, sheet or names[0], headers_only=True)
+        table = read_table(path, sheet or names[0], headers_only=True, has_headers=has_headers)
         column = next((name for name in table.headers if name.casefold() == "chcode"), "")
         return Inspection(tuple(names), table.sheet, tuple(table.headers), column)
 
@@ -77,7 +78,8 @@ def inspect_upload(upload: Upload, sheet: str | None = None) -> Inspection:
 def configuration_signature(database: UploadedSource, files: list[UploadedSource], options: Options) -> str:
     def describe(source):
         return {"upload": source.upload.fingerprint, "sheet": source.sheet, "column": source.column,
-                "mappings": None if source.mappings is None else [asdict(item) for item in source.mappings]}
+                "mappings": None if source.mappings is None else [asdict(item) for item in source.mappings],
+                "has_headers": source.has_headers}
     configuration = {"database": describe(database), "files": [describe(source) for source in files], "options": asdict(options)}
     return hashlib.sha256(json.dumps(configuration, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -88,8 +90,10 @@ def run_uploaded_check(database: UploadedSource, files: list[UploadedSource], op
         raise ValueError("Upload at least one file to check.")
     with tempfile.TemporaryDirectory(prefix="chcode_check_") as folder:
         root = Path(folder)
-        database_source = Source(_write_upload(root / "database", database.upload), database.sheet, database.column)
-        sources = [Source(_write_upload(root / "files" / str(index), source.upload), source.sheet, source.column, source.mappings)
+        database_source = Source(_write_upload(root / "database", database.upload), database.sheet, database.column,
+                                 has_headers=database.has_headers)
+        sources = [Source(_write_upload(root / "files" / str(index), source.upload), source.sheet, source.column,
+                          source.mappings, source.has_headers)
                    for index, source in enumerate(files)]
         results = check_files(database_source, sources, options, progress)
         # The download describes client filenames, and remains valid after the

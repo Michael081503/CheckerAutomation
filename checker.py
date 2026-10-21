@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from itertools import chain
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -36,6 +37,7 @@ class Source:
     sheet: str
     column: str
     mappings: tuple[ColumnMapping, ...] | None = None
+    has_headers: bool = True
 
 
 @dataclass(frozen=True)
@@ -106,11 +108,28 @@ def sheet_names(path: Path) -> list[str]:
         book.close()
 
 
-def _table(path: Path, sheet: str, rows: Iterable) -> Table:
+def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True) -> Table:
     iterator = iter(rows)
     first = next(iterator, None)
     if first is None:
         raise ValueError(f"{path.name}: the selected sheet is empty.")
+    if not has_headers:
+        records = []
+        width = 0
+        for number, values in enumerate(chain((first,), iterator), 1):
+            values = tuple(values)
+            if any(value is not None and str(value).strip() for value in values):
+                width = max(width, len(values))
+                records.append((number, values))
+        if not records:
+            raise ValueError(f"{path.name}: the selected sheet is empty.")
+        if width < 2:
+            raise ValueError(f"{path.name}: headerless files need at least two columns; CHCODE must be in column B.")
+        from openpyxl.utils import get_column_letter
+        headers = ["CHCODE" if index == 2 else f"Column {get_column_letter(index)}"
+                   for index in range(1, width + 1)]
+        return Table(path, sheet, headers,
+                     [(number, values + (None,) * (width - len(values))) for number, values in records])
     # Keep internal empty headers so column positions never shift.
     headers = [str(value).strip() if value is not None else "" for value in first]
     while headers and not headers[-1]:
@@ -138,7 +157,8 @@ def _table(path: Path, sheet: str, rows: Iterable) -> Table:
     return Table(path, sheet, headers, records)
 
 
-def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = False) -> Table:
+def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = False,
+               has_headers: bool = True) -> Table:
     path = Path(path)
     _validate(path)
     if path.suffix.lower() == ".csv":
@@ -152,14 +172,22 @@ def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = Fal
             dialect = csv.excel
         import io
         reader = csv.reader(io.StringIO(contents, newline=""), dialect)
-        return _table(path, "CSV", [next(reader, ())] if headers_only else reader)
+        table = _table(path, "CSV", [next(reader, ())] if headers_only and has_headers else reader,
+                       has_headers=has_headers)
+        if headers_only:
+            table.rows = []
+        return table
     book = load_workbook(path, read_only=True, data_only=True)
     try:
         selected = sheet or book.sheetnames[0]
         if selected not in book.sheetnames:
             raise ValueError(f"Sheet '{selected}' no longer exists in {path.name}.")
         reader = book[selected].iter_rows(values_only=True)
-        return _table(path, selected, [next(reader, ())] if headers_only else reader)
+        table = _table(path, selected, [next(reader, ())] if headers_only and has_headers else reader,
+                       has_headers=has_headers)
+        if headers_only:
+            table.rows = []
+        return table
     finally:
         book.close()
 
@@ -252,9 +280,13 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
                     result: FileResult, options: Options, lookup: dict,
                     cancelled: Callable[[], bool]) -> None:
     result.comparison_mode = "Uploaded rows"
-    mappings = list(source.mappings) if source.mappings is not None else suggest_mappings(
-        target.headers, table.headers, source.column, database.column)
-    if options.require_flow_stage:
+    if source.mappings is not None:
+        mappings = list(source.mappings)
+    elif source.has_headers:
+        mappings = suggest_mappings(target.headers, table.headers, source.column, database.column)
+    else:
+        mappings = [ColumnMapping(source.column, database.column)]
+    if result.flow_stage_required:
         if source.mappings is not None and any(item.file_column == result.flow_stage_column for item in mappings):
             raise ValueError("FLOW_STAGE is the file identifier and must not be mapped to a database column.")
         mappings = [item for item in mappings if item.file_column != result.flow_stage_column]
@@ -315,6 +347,8 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
 def check_files(database: Source, files: list[Source], options: Options,
                 progress: Callable[[int, int, FileResult], None] | None = None,
                 cancelled: Callable[[], bool] = lambda: False) -> list[FileResult]:
+    if not database.has_headers:
+        raise ValueError("The database must have column headers, including CHCODE, in row 1.")
     table = read_table(database.path, database.sheet)
     if database.column not in table.headers:
         raise ValueError(f"Database column '{database.column}' no longer exists.")
@@ -345,13 +379,15 @@ def check_files(database: Source, files: list[Source], options: Options,
             raise Cancelled()
         result = FileResult(source, [], [], database_headers=table.headers,
                             comparison_mode="Uploaded rows" if options.mapped_fields else "Full database copy",
-                            flow_stage_required=options.require_flow_stage)
+                            flow_stage_required=options.require_flow_stage and source.has_headers)
         try:
-            target = read_table(source.path, source.sheet)
+            if not source.has_headers and not options.mapped_fields:
+                raise ValueError("Headerless files support uploaded-row checks only. Choose Validate uploaded rows.")
+            target = read_table(source.path, source.sheet, has_headers=source.has_headers)
             result.headers = target.headers
             if source.column not in target.headers:
                 raise ValueError(f"Match column '{source.column}' no longer exists.")
-            if options.require_flow_stage:
+            if result.flow_stage_required:
                 _identify_flow_stage(target, result)
             if options.mapped_fields:
                 _compare_mapped(table, target, database, source, result, options, lookup, cancelled)

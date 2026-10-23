@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
-from collections import defaultdict
-from dataclasses import replace
-
 import streamlit as st
 
-from checker import ColumnMapping, Options, find_header, is_datagrid_pair, suggest_mappings
-from web_checker import Upload, UploadedSource, configuration_signature, inspect_upload, run_uploaded_check
+from checker import Options, find_header
+from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check
 
-UPLOADED_ROWS = "Validate uploaded rows (mapped fields)"
-FULL_COPY = "Compare complete database copy"
-SKIP = "(Do not check)"
 PREVIEW_LIMIT = 500
 PASSED = {"EXACT MATCH", "MAPPED ROWS MATCH", "SAME ROWS"}
 
@@ -24,14 +17,6 @@ def clear_session():
     st.session_state.upload_epoch = epoch
 
 
-def inspection(upload, sheet=None, *, has_headers=True):
-    cache = st.session_state.setdefault("inspections", {})
-    key = (upload.fingerprint, sheet, has_headers)
-    if key not in cache:
-        cache[key] = inspect_upload(upload, sheet, has_headers=has_headers)
-    return cache[key]
-
-
 def text(value):
     return "" if value is None else str(value)
 
@@ -39,11 +24,6 @@ def text(value):
 def reset_results():
     st.session_state.pop("check_run", None)
     st.session_state.pop("check_signature", None)
-
-
-def lookup_columns(info, *, database=False):
-    names = {"chcode", "old i.c."} if database else {"chcode", "indexone_uid", "primary_key"}
-    return [header for header in info.headers if header.casefold() in names or header == info.column]
 
 
 def apply_style():
@@ -77,42 +57,6 @@ def apply_style():
     [data-testid="stBaseButton-secondary"]:not(:disabled):hover {border-color: #2dd4bf; color: #5eead4;}
 </style>
 """, unsafe_allow_html=True)
-
-
-def mapping_editor(headers, file_key, database_info, layout_id, count, *, has_headers=True):
-    suggested = {item.file_column: item for item in suggest_mappings(
-        list(headers), list(database_info.headers), file_key, database_info.column)} if has_headers else {}
-    identifier = find_header(headers, "FLOW_STAGE")
-    rows = []
-    for header in headers:
-        if header in {file_key, identifier}:
-            continue
-        item = suggested.get(header)
-        rows.append({"File column": header, "Database column": item.database_column if item else SKIP,
-                     "Compare as": item.comparison if item else "Text"})
-    with st.popover(f"Edit comparison fields · {count} file(s)", width="stretch"):
-        if not has_headers:
-            st.caption(f"CHCODE in column B finds the database row via {database_info.column}. Other columns are unchecked until mapped.")
-        elif not identifier and is_datagrid_pair(headers, database_info.headers, file_key, database_info.column):
-            st.caption(f"{file_key} finds the database row via {database_info.column}. The filename identifies this DataGrid email blast.")
-        else:
-            st.caption(f"{file_key} finds the database row via {database_info.column}. FLOW_STAGE identifies the file.")
-        edited = st.data_editor(
-            rows, hide_index=True, num_rows="fixed", disabled=["File column"],
-            column_config={
-                "Database column": st.column_config.SelectboxColumn(options=[SKIP, *database_info.headers], required=True),
-                "Compare as": st.column_config.SelectboxColumn(options=["Text", "Number", "Product"], required=True),
-            }, key=f"mapping_{layout_id}", width="stretch",
-        ) if rows else []
-        mappings = [ColumnMapping(file_key, database_info.column)]
-        for row in edited:
-            if row["Database column"] != SKIP:
-                mappings.append(ColumnMapping(row["File column"], row["Database column"], row["Compare as"]))
-        checked = {item.file_column for item in mappings}
-        ignored = [name for name in headers if name not in checked and name != identifier]
-        st.caption("Number ignores comma separators. Product recognizes Credit Card / CARDS and Personal Loan / LOAN.")
-        st.text(f"Not checked: {', '.join(ignored) or 'None'}")
-    return tuple(mappings)
 
 
 def render_file_details(result, run, index):
@@ -179,7 +123,7 @@ def render_file_details(result, run, index):
                 coverage.append({"File column": name, "Database column": equivalent,
                                  "Coverage": "CHECKED" if equivalent else "EXTRA COLUMN"})
         if not result.source.has_headers:
-            st.caption("Only CHCODE in column B is checked by default for headerless files. Unmapped columns are not checked.")
+            st.caption("Only CHCODE in column B is checked for headerless files. Other columns are not checked.")
         else:
             st.caption("Results cover the compared fields. Unmapped campaign fields are not checked.")
         st.caption(f"File identifier: {result.file_identifier}")
@@ -217,7 +161,7 @@ def render_results(run):
 
 
 def main():
-    st.set_page_config(page_title="File Checker", page_icon="📋", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="File Checker", page_icon=":material/fact_check:", layout="wide", initial_sidebar_state="collapsed")
     apply_style()
     title, restart = st.columns([4, 1], vertical_alignment="center")
     with title:
@@ -240,133 +184,74 @@ def main():
 
     database_upload = Upload(database_file.name, database_file.getvalue()) if database_file is not None else None
     file_uploads = [Upload(file.name, file.getvalue()) for file in uploaded_files]
-    current_inputs = (database_upload.fingerprint if database_upload else None, tuple(upload.fingerprint for upload in file_uploads))
+    current_inputs = (AUTO_DETECTION_VERSION, database_upload.fingerprint if database_upload else None,
+                      tuple(upload.fingerprint for upload in file_uploads))
     if st.session_state.get("input_signature") != current_inputs:
         reset_results()
+        st.session_state.pop("preparation", None)
         st.session_state.input_signature = current_inputs
-        active = {upload.fingerprint for upload in file_uploads}
-        if database_upload:
-            active.add(database_upload.fingerprint)
-        st.session_state.inspections = {key: value for key, value in st.session_state.get("inspections", {}).items() if key[0] in active}
 
-    database_info = None
-    database_sheet = ""
-    database_error = ""
-    sources = []
-    layouts = defaultdict(list)
-    file_summary = []
-    with st.expander("Advanced options", expanded=False):
-        mode = st.selectbox("Comparison", [UPLOADED_ROWS, FULL_COPY], key="check_mode")
-        option_left, option_right = st.columns(2)
-        ignore_case = option_left.checkbox("Ignore letter case", value=True, key="ignore_case")
-        trim_spaces = option_right.checkbox("Trim outer spaces", value=True, key="trim_spaces")
-        if mode == FULL_COPY:
-            st.caption("Every database row and data column must be present. FLOW_STAGE remains the file identifier.")
-        else:
-            st.caption("Checks the rows in your files. They can be smaller subsets of the database.")
-        if database_upload:
-            try:
-                base = inspection(database_upload)
-                database_sheet = st.selectbox("Database worksheet", base.sheets,
-                                               key=f"database_sheet_{database_upload.fingerprint}") if len(base.sheets) > 1 else base.sheet
-                database_info = inspection(database_upload, database_sheet)
-                if not database_info.column:
-                    database_error = "The selected database worksheet must have a CHCODE header or the supported DataGrid headers: Name, Old I.C., Account No., and Email."
-                else:
-                    columns = lookup_columns(database_info, database=True)
-                    database_column = st.selectbox(
-                        "Database lookup column (CHCODE)", columns, index=columns.index(database_info.column),
-                        key=f"database_column_{database_upload.fingerprint}_{database_sheet}",
-                        help="Select the database column containing the CHCODE. DataGrid exports usually use Old I.C.",
-                    )
-                    database_info = replace(database_info, column=database_column)
-            except Exception as error:
-                database_error = str(error)
-        for index, upload in enumerate(file_uploads):
-            has_headers = not st.checkbox(f"No headers (CHCODE in column B): {upload.name}",
-                                           key=f"headerless_{index}_{upload.fingerprint}",
-                                           help="Leave unchecked when the file has headers, including DataGrid email blasts. Select only when every row is data and CHCODE values are in column B.")
-            try:
-                base = inspection(upload, has_headers=has_headers)
-                sheet = st.selectbox(f"Worksheet: {upload.name}", base.sheets,
-                                     key=f"file_sheet_{index}_{upload.fingerprint}") if len(base.sheets) > 1 else base.sheet
-                info = inspection(upload, sheet, has_headers=has_headers)
-                if has_headers and info.column:
-                    columns = lookup_columns(info)
-                    file_column = st.selectbox(
-                        f"Lookup column (CHCODE): {upload.name}", columns, index=columns.index(info.column),
-                        key=f"file_column_{index}_{upload.fingerprint}_{sheet}",
-                        help="Select the file column containing the CHCODE. Choose indexone_uid or primary_key according to this file's layout.",
-                    )
-                    info = replace(info, column=file_column)
-                source = UploadedSource(upload, sheet, info.column or "CHCODE", has_headers=has_headers)
-                if not info.column:
-                    status = "Missing CHCODE or supported DataGrid email-blast key header"
-                elif not has_headers and mode == FULL_COPY:
-                    status = "Headerless files need uploaded-row comparison"
-                elif (has_headers and not find_header(info.headers, "FLOW_STAGE")
-                      and not (mode == UPLOADED_ROWS and database_info and is_datagrid_pair(
-                          info.headers, database_info.headers, info.column, database_info.column))):
-                    status = "Missing FLOW_STAGE header"
-                else:
-                    status = "Ready"
-                    layouts[(info.headers, info.column, has_headers)].append(index)
-                file_summary.append({"File": upload.name, "Worksheet": sheet,
-                                     "Header row": str(info.header_row) if info.header_row is not None else "No headers",
-                                     "Status": status})
-            except Exception as error:
-                source = UploadedSource(upload, "", "CHCODE", has_headers=has_headers)
-                file_summary.append({"File": upload.name, "Worksheet": "", "Header row": "", "Status": str(error)})
-            sources.append(source)
-        if file_summary:
-            st.dataframe(file_summary, hide_index=True, width="stretch")
-        mapped_fields = mode == UPLOADED_ROWS
-        if mapped_fields and database_info and not database_error:
-            for (headers, file_key, has_headers), indices in layouts.items():
-                layout_id = hashlib.sha256(repr((database_upload.fingerprint, database_sheet, database_info.column, headers, file_key, has_headers)).encode("utf-8")).hexdigest()
-                mappings = mapping_editor(headers, file_key, database_info, layout_id, len(indices), has_headers=has_headers)
-                for index in indices:
-                    sources[index] = replace(sources[index], mappings=mappings)
-        st.caption("CHCODE campaign files with headers need one FLOW_STAGE value, such as NO_REPLY. Recognized DataGrid email blasts use their filenames in uploaded-row mode. Headerless files use column B as CHCODE and include row 1.")
-        st.caption("CHCODE and supported DataGrid header rows are detected automatically; rows above them are skipped. Leave No headers unchecked when the file has headers.")
-        st.caption("Check the lookup columns above. For DataGrid, use Old I.C. in the database and choose indexone_uid or primary_key in each email blast according to where its CHCODE is stored.")
-        st.caption("Headerless files check CHCODE only by default. Edit comparison fields to map other columns. The database still needs headers.")
-        st.caption("Uploads are processed on the app server in this session. Start over clears the current uploads and results.")
+    prepared = None
+    if database_upload:
+        if "preparation" not in st.session_state:
+            with st.spinner("Detecting worksheets, headers, and CHCODE columns..."):
+                st.session_state.preparation = prepare_uploaded_check(database_upload, file_uploads)
+        prepared = st.session_state.preparation
 
-    if database_info and not database_error:
-        st.caption(f"Database: {database_info.column} header found on row {database_info.header_row}.")
-    if database_error:
+    if prepared and prepared.database_error:
         reset_results()
-        st.error(f"Database: {database_error}")
-    file_errors = sum(item["Status"] != "Ready" for item in file_summary)
-    if file_errors:
-        st.warning(f"{file_errors} file(s) need attention. See Advanced options for details.")
-    ready = bool(database_upload and database_info and not database_error and sources)
-    if ready:
-        st.caption(f"{len(sources)} file(s) ready to check.")
-    elif database_upload is None:
-        reset_results()
+        st.error(f"Database: {prepared.database_error}")
+    elif prepared and prepared.database_info:
+        info = prepared.database_info
+        worksheet = f"{info.sheet}, " if info.sheet else ""
+        st.caption(f"Database: {database_upload.name} - {worksheet}{info.column} header found on row {info.header_row}.")
+
+    if prepared and prepared.files:
+        summary = []
+        for item in prepared.files:
+            info = item.inspection
+            summary.append({
+                "File": item.source.upload.name,
+                "Worksheet": item.source.sheet,
+                "Header row": (str(info.header_row) if info and item.source.has_headers
+                               else "No headers" if info else ""),
+                "CHCODE column": item.source.column if info else "",
+                "Status": item.error or "Ready",
+            })
+        st.dataframe(summary, hide_index=True, width="stretch")
+        for item in prepared.files:
+            if item.note and not item.error:
+                st.caption(f"{item.source.upload.name}: {item.note}")
+        file_errors = sum(bool(item.error) for item in prepared.files)
+        if file_errors:
+            st.warning(f"{file_errors} file(s) need attention. Details are shown above and included in the report.")
+        if not prepared.database_error:
+            ready_count = len(prepared.files) - file_errors
+            st.caption(f"{ready_count} file(s) ready to check.")
+
+    ready = bool(prepared and prepared.database and not prepared.database_error and prepared.files)
+    if database_upload is None:
         st.caption("Add a database and your files to get started. Excel and CSV are supported.")
-    else:
-        reset_results()
+    elif prepared and not prepared.database_error and not prepared.files:
         st.caption("Add at least one file to check.")
+    st.caption("CHCODE can be in CHCODE, primary_key, or indexone_uid. The lookup column is detected automatically. Headerless files use column B and include row 1; only CHCODE is checked.")
+    st.caption("Uploads are processed in this session. Start over clears the current uploads and results.")
 
-    options = Options(ignore_case, trim_spaces, mapped_fields, require_flow_stage=True)
-    database = UploadedSource(database_upload, database_sheet, database_info.column) if ready else None
-    signature = configuration_signature(database, sources, options) if ready else None
+    options = Options(ignore_case=True, trim_spaces=True, mapped_fields=True,
+                      require_flow_stage=True, allow_missing_flow_stage=True)
+    signature = configuration_signature(prepared.database, [item.source for item in prepared.files], options) if ready else None
     if st.session_state.get("check_run") and st.session_state.get("check_signature") != signature:
         reset_results()
-        st.caption("Settings changed. Check the files again to update results.")
     if st.button("3. Check files", type="primary", key="run_check", disabled=not ready, width="stretch"):
         reset_results()
-        progress = st.progress(0, text="Reading your database…")
+        progress = st.progress(0, text="Reading your database...")
 
         def update(index, total, result):
-            progress.progress(index / total, text=f"Checking file {index} of {total}…")
+            progress.progress(index / total, text=f"Checking file {index} of {total}...")
 
         try:
-            with st.spinner("Checking your files…"):
-                st.session_state.check_run = run_uploaded_check(database, sources, options, update)
+            with st.spinner("Checking your files..."):
+                st.session_state.check_run = run_prepared_check(prepared, update)
                 st.session_state.check_signature = signature
         except Exception as error:
             st.error(f"Unable to complete the check: {error}")

@@ -88,6 +88,25 @@ def cbs_pl_uploads():
     ])
 
 
+def hsbc_mobile_uploads(*, changed_phone=False, missing_key=False):
+    database = xlsx_upload("HSBC DB as of Oct 23, 2026.xlsx", [
+        ["CHCODE", "Mobile phone", "Name", "Last Name", "PROD TYPE"],
+        ["00123", "09171234567", "Alice Smith", "Smith", "CARDS"],
+        ["456", "+639181234567", "Bob Jones", "Jones", "LOAN"],
+    ])
+    rows = [
+        ["formatted mobile", "ChCode", "ChName", "LastName", "ProductType"],
+        ["+639171234567", "00123", "Alice Smith", "Smith", "Credit Card"],
+        ["+639199999999" if changed_phone else "639181234567", "456", "Bob Jones", "Jones", "Personal Loan"],
+    ]
+    if missing_key:
+        rows.append(["09191234567", "00999", "Missing Account", "Account", "Credit Card"])
+    field = xlsx_upload("23-10-26 BLAST Field.xlsx", rows)
+    endo_rows = [rows[0], ["639171234567", *rows[1][1:]], ["09181234567", *rows[2][1:]]]
+    endo = xlsx_upload("23-10-26 BLAST NEW ENDO.xlsx", endo_rows)
+    return database, [field, endo]
+
+
 class WebCheckerTests(unittest.TestCase):
     def database(self):
         return UploadedSource(database_upload(), "Accounts", "CHCODE")
@@ -157,6 +176,63 @@ class WebCheckerTests(unittest.TestCase):
             self.assertEqual(coverage["bcc"][2], "NOT CHECKED")
         finally:
             book.close()
+
+    def test_hsbc_mobile_blasts_without_stage_check_all_five_fields_and_report_coverage(self):
+        upload, blasts = hsbc_mobile_uploads()
+        database_info = inspect_upload(upload)
+        self.assertEqual(database_info.column, "CHCODE")
+        database = UploadedSource(upload, database_info.sheet, database_info.column)
+        sources = []
+        for blast in blasts:
+            info = inspect_upload(blast)
+            self.assertEqual(info.column, "ChCode")
+            sources.append(UploadedSource(blast, info.sheet, info.column))
+        run = run_uploaded_check(database, sources, Options(mapped_fields=True, require_flow_stage=True))
+        expected_mappings = {
+            ColumnMapping("ChCode", "CHCODE"),
+            ColumnMapping("formatted mobile", "Mobile phone", "Phone"),
+            ColumnMapping("ChName", "Name"),
+            ColumnMapping("LastName", "Last Name"),
+            ColumnMapping("ProductType", "PROD TYPE", "Product"),
+        }
+        for result, blast in zip(run.results, blasts):
+            with self.subTest(file=blast.name):
+                self.assertFalse(result.error)
+                self.assertEqual(result.verdict, "MAPPED ROWS MATCH")
+                self.assertEqual(result.file_identifier, blast.name)
+                self.assertFalse(result.flow_stage_required)
+                self.assertFalse(result.flow_stage)
+                self.assertEqual(set(result.mappings), expected_mappings)
+                self.assertEqual(result.ignored_columns, [])
+                self.assertEqual([record[:3] for record in result.records], [(2, "MATCHED", "2"), (3, "MATCHED", "3")])
+        book = load_workbook(io.BytesIO(run.report))
+        try:
+            for index, blast in enumerate(blasts, 1):
+                self.assertEqual(book["Summary"].cell(index + 8, 2).value, blast.name)
+                coverage = {row[0]: row[1:4] for row in book[f"Mappings {index:03d}"].iter_rows(min_row=2, values_only=True)}
+                self.assertEqual(len(coverage), 5)
+                self.assertTrue(all(row[2] == "CHECKED" for row in coverage.values()))
+                self.assertEqual(coverage["formatted mobile"], ("Mobile phone", "Phone", "CHECKED"))
+                self.assertEqual(coverage["ProductType"], ("PROD TYPE", "Product", "CHECKED"))
+        finally:
+            book.close()
+
+    def test_hsbc_mobile_blast_flags_different_phone_and_missing_account_without_stage(self):
+        upload, blasts = hsbc_mobile_uploads(changed_phone=True, missing_key=True)
+        info = inspect_upload(upload)
+        blast_info = inspect_upload(blasts[0])
+        database = UploadedSource(upload, info.sheet, info.column)
+        source = UploadedSource(blasts[0], blast_info.sheet, blast_info.column)
+        run = run_uploaded_check(database, [source], Options(mapped_fields=True, require_flow_stage=True))
+        result = run.results[0]
+        self.assertFalse(result.error)
+        self.assertEqual(result.verdict, "ROW ISSUES")
+        self.assertEqual([record[:3] for record in result.records], [
+            (2, "MATCHED", "2"), (3, "DIFFERENT", "3"), (4, "NOT FOUND", ""),
+        ])
+        self.assertEqual(len(result.differences), 1)
+        self.assertTrue(result.differences[0][2].startswith("formatted mobile"))
+        self.assertEqual(result.differences[0][3:], ("+639199999999", "+639181234567"))
 
     def test_cbs_apd_joins_primary_key_when_secondary_uid_differs(self):
         database_upload, blast = cbs_apd_uploads(changed_secondary_uid=True)

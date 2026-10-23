@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -14,6 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
+CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 
 
 @dataclass
@@ -39,6 +41,7 @@ class Source:
     column: str
     mappings: tuple[ColumnMapping, ...] | None = None
     has_headers: bool = True
+    detection_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class Options:
     trim_spaces: bool = True
     mapped_fields: bool = False
     require_flow_stage: bool = False
+    allow_missing_flow_stage: bool = False
 
 
 @dataclass
@@ -125,6 +129,13 @@ def _header_names(values: Iterable) -> set[str]:
     return {str(value).strip().casefold() for value in values if value is not None}
 
 
+def chcode_columns(headers: Iterable[str]) -> list[str]:
+    """Find CHCODE aliases in priority order while preserving source names."""
+    headers = list(headers)
+    return [header for alias in CHCODE_ALIASES for header in headers
+            if header.strip().casefold() == alias]
+
+
 def is_datagrid_database(headers: Iterable) -> bool:
     """Recognize the supported DataGrid schema, rather than an arbitrary key name."""
     names = _header_names(headers)
@@ -135,7 +146,7 @@ def is_datagrid_email_blast(headers: Iterable) -> bool:
     """Recognize email-blast fields that have DataGrid counterparts."""
     names = _header_names(headers)
     return ({"email", "chname", "accountnumber"}.issubset(names)
-            and bool({"indexone_uid", "primary_key"} & names))
+            and bool(set(CHCODE_ALIASES[1:]) & names))
 
 
 def is_cbs_apd_email_blast(headers: Iterable) -> bool:
@@ -145,7 +156,7 @@ def is_cbs_apd_email_blast(headers: Iterable) -> bool:
 
 
 def match_column(headers: Iterable[str]) -> str:
-    """Select a supported schema's match key, preserving CHCODE precedence."""
+    """Select the CHCODE key, including aliases in ordinary header layouts."""
     headers = list(headers)
     for header in headers:
         if header.strip().casefold() == "chcode":
@@ -158,7 +169,8 @@ def match_column(headers: Iterable[str]) -> str:
             for header in headers:
                 if header.strip().casefold() == expected:
                     return header
-    return ""
+    aliases = chcode_columns(headers)
+    return aliases[0] if aliases else ""
 
 
 def is_datagrid_pair(file_headers: Iterable[str], database_headers: Iterable[str],
@@ -169,13 +181,39 @@ def is_datagrid_pair(file_headers: Iterable[str], database_headers: Iterable[str
     database_key = match_column(database_headers) if database_key is None else database_key
     return (not _has_chcode(file_headers) and not _has_chcode(database_headers)
             and is_datagrid_email_blast(file_headers) and is_datagrid_database(database_headers)
-            and file_key.strip().casefold() in {"indexone_uid", "primary_key"}
+            and file_key.strip().casefold() in CHCODE_ALIASES[1:]
             and database_key.strip().casefold() == "old i.c.")
+
+
+def is_hsbc_mobile_pair(file_headers: Iterable[str], database_headers: Iterable[str],
+                        file_key: str | None = None, database_key: str | None = None) -> bool:
+    """Recognize the HSBC mobile blast and the database fields it validates."""
+    file_headers, database_headers = list(file_headers), list(database_headers)
+    file_key = match_column(file_headers) if file_key is None else file_key
+    database_key = match_column(database_headers) if database_key is None else database_key
+    return ({"formatted mobile", "chcode", "chname", "lastname", "producttype"}.issubset(
+                _header_names(file_headers))
+            and {"chcode", "mobile phone", "name", "last name", "prod type"}.issubset(
+                _header_names(database_headers))
+            and file_key.strip().casefold() == "chcode"
+            and database_key.strip().casefold() == "chcode")
+
+
+def is_filename_identified_pair(file_headers: Iterable[str], database_headers: Iterable[str],
+                                file_key: str | None = None, database_key: str | None = None) -> bool:
+    """Supported mapped layouts may use filenames when FLOW_STAGE is absent."""
+    file_headers, database_headers = list(file_headers), list(database_headers)
+    return (is_datagrid_pair(file_headers, database_headers, file_key, database_key)
+            or is_hsbc_mobile_pair(file_headers, database_headers, file_key, database_key))
 
 
 def _has_supported_header(values: Iterable) -> bool:
     values = list(values)
-    return _has_chcode(values) or is_datagrid_database(values) or is_datagrid_email_blast(values)
+    names = _header_names(values)
+    identifier_layout = bool(names & set(CHCODE_ALIASES[1:])) and bool(
+        names & {"flow_stage", "name", "email", "chname", "accountnumber"})
+    return (_has_chcode(values) or is_datagrid_database(values)
+            or is_datagrid_email_blast(values) or identifier_layout)
 
 
 def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
@@ -304,9 +342,13 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
     aliases = {
         "email": ("Email address", "Text"),
         "primary_key": (database_key, "Text"),
+        "indexone_uid": (database_key, "Text"),
         "chname": ("Name", "Text"),
         "chname_format": ("Last Name", "Text"),
+        "lastname": ("Last Name", "Text"),
+        "formatted mobile": ("Mobile phone", "Phone"),
         "product_type": ("PROD TYPE", "Product"),
+        "producttype": ("PROD TYPE", "Product"),
         "ob_at_endorsement": ("OB", "Number"),
     }
     datagrid_aliases = {}
@@ -320,6 +362,8 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
         }
         if is_cbs_apd_email_blast(file_headers) and "account type" in database_names:
             datagrid_aliases["campaignbucket"] = ("Account Type", "Text")
+        if "financing/card no." in database_names:
+            datagrid_aliases["financingnumber"] = ("Financing/Card No.", "Text")
     mappings = []
     for name in file_headers:
         if name == file_key:
@@ -337,6 +381,14 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
 
 
 def compare_value(value, comparison: str, options: Options) -> str:
+    if comparison == "Phone":
+        text = normalize(value, options)
+        if re.fullmatch(r"[+0-9()\s-]+", text):
+            compact = re.sub(r"[()\s-]", "", text)
+            mobile = re.fullmatch(r"(?:\+?63|0)?(9[0-9]{9})", compact)
+            if mobile:
+                return "+63" + mobile.group(1)
+        return text
     if comparison == "Number" and value is not None and str(value).strip():
         try:
             from decimal import InvalidOperation
@@ -400,7 +452,7 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
     for item in mappings:
         if item.file_column not in target.headers or item.database_column not in table.headers:
             raise ValueError(f"Mapping no longer exists: {item.file_column} → {item.database_column}. Review field mappings.")
-        if item.comparison not in {"Text", "Number", "Product"}:
+        if item.comparison not in {"Text", "Number", "Product", "Phone"}:
             raise ValueError(f"Unknown comparison type: {item.comparison}")
     result.mappings = mappings
     result.ignored_columns = [name for name in target.headers if name not in {item.file_column for item in mappings}
@@ -485,6 +537,8 @@ def check_files(database: Source, files: list[Source], options: Options,
                             comparison_mode="Uploaded rows" if options.mapped_fields else "Full database copy",
                             flow_stage_required=options.require_flow_stage and source.has_headers)
         try:
+            if source.detection_error:
+                raise ValueError(source.detection_error)
             if not source.has_headers and not options.mapped_fields:
                 raise ValueError("Headerless files support uploaded-row checks only. Choose Validate uploaded rows.")
             target = read_table(source.path, source.sheet, has_headers=source.has_headers)
@@ -493,7 +547,8 @@ def check_files(database: Source, files: list[Source], options: Options,
                 raise ValueError(f"Match column '{source.column}' no longer exists.")
             if (options.mapped_fields and result.flow_stage_required
                     and not find_header(target.headers, "FLOW_STAGE")
-                    and is_datagrid_pair(target.headers, table.headers, source.column, database.column)):
+                    and (options.allow_missing_flow_stage or is_filename_identified_pair(
+                        target.headers, table.headers, source.column, database.column))):
                 result.flow_stage_required = False
             if result.flow_stage_required:
                 _identify_flow_stage(target, result)
@@ -634,7 +689,8 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                     append(mapping_sheet, [header, "", "", "NOT CHECKED", "No database mapping selected"])
                 else:
                     rule = {"Text": "Uses case and space options", "Number": "Numeric equality; commas ignored",
-                            "Product": "Credit Card = CARDS; Personal Loan = LOAN"}[item.comparison]
+                            "Product": "Credit Card = CARDS; Personal Loan = LOAN",
+                            "Phone": "Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison"}[item.comparison]
                     append(mapping_sheet, [header, item.database_column, item.comparison, "CHECKED", rule])
         else:
             missing = book.create_sheet(f"Missing {index:03d}")

@@ -64,7 +64,7 @@ class CbsApdTests(unittest.TestCase):
         self.assertFalse(is_cbs_apd_email_blast(msb_headers))
         self.assertEqual(match_column(msb_headers), "indexone_uid")
         self.assertFalse(is_cbs_apd_email_blast(["primary_key", "campaignbucket"]))
-        self.assertEqual(match_column(["primary_key", "campaignbucket"]), "")
+        self.assertEqual(match_column(["primary_key", "campaignbucket"]), "primary_key")
 
     def test_cbs_checks_six_fields_against_datagrid(self):
         campaign = self.campaign()

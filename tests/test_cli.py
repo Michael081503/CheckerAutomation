@@ -11,6 +11,7 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 
 from scripts.check_files import main
+from test_web_checker import hsbc_mobile_uploads
 
 
 class CommandLineTests(unittest.TestCase):
@@ -75,6 +76,78 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(results[0]["database_key"], "Old I.C.")
         self.assertEqual(results[0]["not_found"], 1)
         self.assertEqual(results[0]["verdict"], "ROW ISSUES")
+
+    def test_generic_aliases_are_detected_without_file_key_and_preserved_in_report(self):
+        aliases = ("Primary_Key", "INDEXONE_UID")
+        paths = [self.csv(f"generic-{alias}.csv", [
+            ["Name", alias, "FLOW_STAGE"],
+            [self.values[3], "00123", "MAIL"],
+            [self.values[3], "123", "MAIL"],
+        ]) for alias in aliases]
+        originals = {path: path.read_bytes() for path in [self.database, *paths]}
+        exit_code, results = self.run_cli(files=paths)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(results), 2)
+        for result, alias in zip(results, aliases):
+            with self.subTest(alias=alias):
+                self.assertEqual(result["file_key"], alias)
+                self.assertEqual(result["database_key"], "Old I.C.")
+                self.assertEqual((result["matched"], result["not_found"], result["changed"]), (1, 1, 0))
+                self.assertEqual(result["checked_fields"], 2)
+                self.assertEqual(result["FLOW_STAGE"], "MAIL")
+                self.assertEqual(result["error"], "")
+        book = load_workbook(self.output, read_only=True, data_only=True)
+        try:
+            self.assertEqual(book["Summary"]["B3"].value, "Old I.C.")
+            for index, alias in enumerate(aliases, 1):
+                self.assertEqual(book["Summary"].cell(8 + index, 4).value, alias)
+                records = list(book[f"File {index:03d}"].values)
+                self.assertEqual(records[0][3:], ("Name", alias, "FLOW_STAGE"))
+                self.assertEqual(records[1][:3], (2, "MATCHED", "2"))
+                self.assertEqual(records[1][4], "00123")
+                self.assertEqual(records[2][:3], (3, "NOT FOUND", None))
+                self.assertEqual(records[2][4], "123")
+                self.assertEqual(book[f"File {index:03d}"]["E2"].data_type, "s")
+                coverage = {row[0]: row[1:4] for row in book[f"Mappings {index:03d}"].iter_rows(min_row=2, values_only=True)}
+                self.assertEqual(coverage[alias], ("Old I.C.", "Text", "CHECKED"))
+        finally:
+            book.close()
+        for path, original in originals.items():
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_hsbc_mobile_blasts_without_stage_check_all_five_fields_in_cli_report(self):
+        upload, blasts = hsbc_mobile_uploads()
+        self.database = self.folder / upload.name
+        self.database.write_bytes(upload.data)
+        paths = []
+        for blast in blasts:
+            path = self.folder / blast.name
+            path.write_bytes(blast.data)
+            paths.append(path)
+        exit_code, results = self.run_cli(files=paths)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(results), 2)
+        for result, blast in zip(results, blasts):
+            with self.subTest(file=blast.name):
+                self.assertEqual(result["identifier"], blast.name)
+                self.assertEqual(result["file_key"], "ChCode")
+                self.assertEqual(result["database_key"], "CHCODE")
+                self.assertEqual(result["verdict"], "MAPPED ROWS MATCH")
+                self.assertEqual((result["matched"], result["changed"], result["not_found"]), (2, 0, 0))
+                self.assertEqual(result["checked_fields"], 5)
+                self.assertEqual(result["unchecked_fields"], [])
+                self.assertFalse(result["error"])
+                self.assertFalse(result["FLOW_STAGE"])
+        book = load_workbook(self.output, read_only=True, data_only=True)
+        try:
+            for index in (1, 2):
+                coverage = {row[0]: row[1:4] for row in book[f"Mappings {index:03d}"].iter_rows(min_row=2, values_only=True)}
+                self.assertEqual(len(coverage), 5)
+                self.assertTrue(all(row[2] == "CHECKED" for row in coverage.values()))
+                self.assertEqual(coverage["formatted mobile"], ("Mobile phone", "Phone", "CHECKED"))
+                self.assertEqual(coverage["ProductType"], ("PROD TYPE", "Product", "CHECKED"))
+        finally:
+            book.close()
 
     def test_missing_explicit_key_is_per_file_error_and_other_files_continue(self):
         missing = self.csv("missing.csv", [self.headers[:1] + self.headers[2:],

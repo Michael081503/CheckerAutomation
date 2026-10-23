@@ -5,7 +5,7 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from checker import Cancelled, ColumnMapping, Options, Source, check_files, compare_value, export_report, normalize, read_table, sheet_names
+from checker import Cancelled, ColumnMapping, Options, Source, check_files, chcode_columns, compare_value, export_report, match_column, normalize, read_table, sheet_names
 
 
 class CheckerTests(unittest.TestCase):
@@ -35,6 +35,44 @@ class CheckerTests(unittest.TestCase):
 
     def source(self, path, sheet="CSV", column="CHCODE"):
         return Source(path, sheet, column)
+
+    def test_generic_chcode_aliases_preserve_names_and_chcode_priority(self):
+        headers = ["IndexOne_UID", "Name", " Primary_Key ", " ChCode "]
+        self.assertEqual(chcode_columns(iter(headers)), [" ChCode ", " Primary_Key ", "IndexOne_UID"])
+        self.assertEqual(match_column(headers), " ChCode ")
+        self.assertEqual(match_column(headers[:-1]), " Primary_Key ")
+        for alias in (" Primary_Key ", "IndexOne_UID"):
+            with self.subTest(alias=alias):
+                self.assertEqual(match_column(["Name", alias, "Other"]), alias)
+        self.assertEqual(chcode_columns(["Name", "Account ID"]), [])
+        self.assertEqual(match_column(["Name", "Account ID"]), "")
+
+    def test_generic_alias_headers_keep_original_rows_and_leading_zeros(self):
+        database = self.source(self.csv("database.csv", [["CHCODE", "Name"], ["00123", "Alice"]]))
+        original_database = database.path.read_bytes()
+        for alias in ("Primary_Key", "INDEXONE_UID"):
+            rows = [["Export report"], [], ["Name", f" {alias} ", "FLOW_STAGE"],
+                    ["Alice", "00123", "MAIL"], ["Alice", "123", "MAIL"], ["Blank", "", "MAIL"]]
+            for path in (self.csv(f"{alias}.csv", rows, delimiter=";"),
+                         self.excel(f"{alias}.xlsx", {"Campaign": rows})):
+                with self.subTest(alias=alias, format=path.suffix):
+                    original = path.read_bytes()
+                    table = read_table(path)
+                    self.assertEqual(table.header_row, 3)
+                    self.assertEqual(table.headers, ["Name", alias, "FLOW_STAGE"])
+                    selected = match_column(table.headers)
+                    self.assertEqual(selected, alias)
+                    result = check_files(database, [Source(path, table.sheet, selected)],
+                                         Options(mapped_fields=True, require_flow_stage=True))[0]
+                    self.assertEqual(result.error, "")
+                    self.assertEqual([record[:3] for record in result.records], [
+                        (4, "MATCHED", "2"), (5, "NOT FOUND", ""), (6, "BLANK KEY", ""),
+                    ])
+                    self.assertIn(ColumnMapping(alias, "CHCODE"), result.mappings)
+                    self.assertEqual(result.records[0][3][1], "00123")
+                    self.assertEqual(result.records[1][3][1], "123")
+                    self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(database.path.read_bytes(), original_database)
 
     def test_multiple_files_with_missing_blank_and_duplicate_codes(self):
         db = self.csv("db.csv", [["CHCODE", "Name"], ["A1", "Alice"], ["A1", "Again"], ["00123", "Zero"], ["B2", "Charlie"]])

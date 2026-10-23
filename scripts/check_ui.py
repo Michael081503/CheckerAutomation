@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import CheckerApp, FULL_COPY
+from app import CheckerApp, FULL_COPY, UPLOADED_ROWS
 from mapping_dialog import MappingDialog, SKIP
 from openpyxl import load_workbook
 
@@ -32,6 +32,12 @@ def main():
             "first.csv": [["CHCODE", "Name"], [" abc ", "Alicia"], ["MISSING", "Bob"], ["", "Blank"]],
             "second.csv": [["Name", "CHCODE"], ["Zoe", "00123"], ["Alice", "ABC"]],
             "invalid.csv": [["Other"], ["ABC"]],
+            "DataGrid.csv": [["Name", "Old I.C.", "Account No.", "Email", "Account Type"],
+                             ["Alice", "MSPL-001", "00123", "alice@example.test", "BUCKET 4 91-120"]],
+            "email_blast.csv": [["email", "cc", "bcc", "indexone_uid", "primary_key", "chname", "accountnumber"],
+                                ["alice@example.test", "", "", "MSPL-001", "MSPL-001", "Alice", "00123"]],
+            "cbs_apd.csv": [["email", "cc", "bcc", "indexone_uid", "primary_key", "accountnumber", "chname", "campaignbucket"],
+                            ["alice@example.test", "", "", "WRONG-UID", "MSPL-001", "00123", "Alice", "BUCKET 4 91-120"]],
         }
         for name, rows in inputs.items():
             with (root / name).open("w", newline="", encoding="utf-8") as stream:
@@ -97,7 +103,46 @@ def main():
             app._invalidate()
             assert not app.results
             assert str(app.export_button['state']) == "disabled"
-            print("GUI workflow passed: uploads, mapped validation, cell differences, custom field mappings, export, full-copy mode, invalidation.")
+            app._clear()
+            app.mode_value.set(UPLOADED_ROWS)
+            with patch("app.filedialog.askopenfilename", return_value=str(root / "DataGrid.csv")):
+                app._choose_database()
+            wait(app)
+            with patch("app.filedialog.askopenfilenames", return_value=[str(root / "email_blast.csv")]):
+                app._add_files()
+            wait(app)
+            assert app.database['column'] == "Old I.C."
+            assert next(iter(app.files.values()))['column'] == "indexone_uid"
+            app._run()
+            wait(app)
+            assert app.results[0].verdict == "MAPPED ROWS MATCH"
+            assert len(app.results[0].mappings) == 5
+            assert app.results[0].ignored_columns == ["cc", "bcc"]
+            app._clear()
+            with patch("app.filedialog.askopenfilenames", return_value=[str(root / "cbs_apd.csv")]):
+                app._add_files()
+            wait(app)
+            assert next(iter(app.files.values()))['column'] == "primary_key"
+            app._run()
+            wait(app)
+            result = app.results[0]
+            assert not result.error
+            assert result.count("DIFFERENT") == 1
+            assert result.count("NOT FOUND") == 0
+            assert result.records[0][2] == "2"
+            assert len(result.mappings) == 6
+            assert len(result.differences) == 1
+            assert result.differences[0][2].startswith("indexone_uid")
+            app.file_key.set("indexone_uid")
+            app._change_file_column()
+            assert not app.results
+            assert str(app.export_button['state']) == "disabled"
+            assert next(iter(app.files.values()))['column'] == "indexone_uid"
+            app._run()
+            wait(app)
+            assert app.results[0].source.column == "indexone_uid"
+            assert app.results[0].count("NOT FOUND") == 1
+            print("GUI workflow passed: uploads, mapped validation, cell differences, custom field mappings, export, full-copy mode, invalidation, MSB and CBS DataGrid email blasts, lookup column selection.")
         finally:
             app.destroy()
 

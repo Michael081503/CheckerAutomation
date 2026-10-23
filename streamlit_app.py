@@ -8,7 +8,7 @@ from dataclasses import replace
 
 import streamlit as st
 
-from checker import ColumnMapping, Options, find_header, suggest_mappings
+from checker import ColumnMapping, Options, find_header, is_datagrid_pair, suggest_mappings
 from web_checker import Upload, UploadedSource, configuration_signature, inspect_upload, run_uploaded_check
 
 UPLOADED_ROWS = "Validate uploaded rows (mapped fields)"
@@ -39,6 +39,11 @@ def text(value):
 def reset_results():
     st.session_state.pop("check_run", None)
     st.session_state.pop("check_signature", None)
+
+
+def lookup_columns(info, *, database=False):
+    names = {"chcode", "old i.c."} if database else {"chcode", "indexone_uid", "primary_key"}
+    return [header for header in info.headers if header.casefold() in names or header == info.column]
 
 
 def apply_style():
@@ -86,8 +91,12 @@ def mapping_editor(headers, file_key, database_info, layout_id, count, *, has_he
         rows.append({"File column": header, "Database column": item.database_column if item else SKIP,
                      "Compare as": item.comparison if item else "Text"})
     with st.popover(f"Edit comparison fields · {count} file(s)", width="stretch"):
-        st.caption("CHCODE in column B finds the database row. Other columns are unchecked until mapped."
-                   if not has_headers else "CHCODE finds the database row. FLOW_STAGE identifies the file.")
+        if not has_headers:
+            st.caption(f"CHCODE in column B finds the database row via {database_info.column}. Other columns are unchecked until mapped.")
+        elif not identifier and is_datagrid_pair(headers, database_info.headers, file_key, database_info.column):
+            st.caption(f"{file_key} finds the database row via {database_info.column}. The filename identifies this DataGrid email blast.")
+        else:
+            st.caption(f"{file_key} finds the database row via {database_info.column}. FLOW_STAGE identifies the file.")
         edited = st.data_editor(
             rows, hide_index=True, num_rows="fixed", disabled=["File column"],
             column_config={
@@ -125,7 +134,7 @@ def render_file_details(result, run, index):
             if len(result.differences) > PREVIEW_LIMIT:
                 st.caption(f"Showing {PREVIEW_LIMIT} of {len(result.differences):,} differences. Download the report for all details.")
         key_position = result.headers.index(result.source.column)
-        unmatched = [{"Row": number, "CHCODE": text(values[key_position]), "Issue": status}
+        unmatched = [{"Row": number, result.source.column: text(values[key_position]), "Issue": status}
                      for number, status, matches, values in result.records
                      if status in {"NOT FOUND", "BLANK KEY", "EXTRA ROW"}]
         if unmatched:
@@ -148,7 +157,7 @@ def render_file_details(result, run, index):
         records = [record for record in result.records
                    if status == "All rows" or (status == "Needs review" and record[1] != "MATCHED") or record[1] == status]
         key_position = result.headers.index(result.source.column)
-        rows = [{"Row": number, "CHCODE": text(values[key_position]), "Result": row_status, "Database row": matches}
+        rows = [{"Row": number, result.source.column: text(values[key_position]), "Result": row_status, "Database row": matches}
                 for number, row_status, matches, values in records[:PREVIEW_LIMIT]]
         if rows:
             st.dataframe(rows, hide_index=True, width="stretch")
@@ -169,9 +178,11 @@ def render_file_details(result, run, index):
                 equivalent = find_header(result.database_headers, name)
                 coverage.append({"File column": name, "Database column": equivalent,
                                  "Coverage": "CHECKED" if equivalent else "EXTRA COLUMN"})
-        st.caption("Only CHCODE in column B is checked by default for headerless files. Unmapped columns are not checked."
-                   if not result.source.has_headers else
-                   "Exact match refers to the compared fields. Unmapped campaign fields are not checked.")
+        if not result.source.has_headers:
+            st.caption("Only CHCODE in column B is checked by default for headerless files. Unmapped columns are not checked.")
+        else:
+            st.caption("Results cover the compared fields. Unmapped campaign fields are not checked.")
+        st.caption(f"File identifier: {result.file_identifier}")
         st.dataframe(coverage, hide_index=True, width="stretch")
 
 
@@ -197,7 +208,7 @@ def render_results(run):
     for index, result in enumerate(results):
         status = ("Mapped fields match" if result.verdict == "MAPPED ROWS MATCH" else
                   "Exact match" if result.verdict in PASSED else "File error" if result.error else "Review needed")
-        stage = result.flow_stage or result.source.path.name
+        stage = result.file_identifier
         label = f"{stage} · {status}"
         if not result.error:
             label += f" · {result.count('MATCHED'):,}/{len(result.records):,} rows matched"
@@ -260,24 +271,42 @@ def main():
                                                key=f"database_sheet_{database_upload.fingerprint}") if len(base.sheets) > 1 else base.sheet
                 database_info = inspection(database_upload, database_sheet)
                 if not database_info.column:
-                    database_error = "The selected database worksheet must have a CHCODE header."
+                    database_error = "The selected database worksheet must have a CHCODE header or the supported DataGrid headers: Name, Old I.C., Account No., and Email."
+                else:
+                    columns = lookup_columns(database_info, database=True)
+                    database_column = st.selectbox(
+                        "Database lookup column (CHCODE)", columns, index=columns.index(database_info.column),
+                        key=f"database_column_{database_upload.fingerprint}_{database_sheet}",
+                        help="Select the database column containing the CHCODE. DataGrid exports usually use Old I.C.",
+                    )
+                    database_info = replace(database_info, column=database_column)
             except Exception as error:
                 database_error = str(error)
         for index, upload in enumerate(file_uploads):
             has_headers = not st.checkbox(f"No headers (CHCODE in column B): {upload.name}",
                                            key=f"headerless_{index}_{upload.fingerprint}",
-                                           help="Leave unchecked when a CHCODE header exists, even below the first row. Select only when every row is data and CHCODE values are in column B.")
+                                           help="Leave unchecked when the file has headers, including DataGrid email blasts. Select only when every row is data and CHCODE values are in column B.")
             try:
                 base = inspection(upload, has_headers=has_headers)
                 sheet = st.selectbox(f"Worksheet: {upload.name}", base.sheets,
                                      key=f"file_sheet_{index}_{upload.fingerprint}") if len(base.sheets) > 1 else base.sheet
                 info = inspection(upload, sheet, has_headers=has_headers)
+                if has_headers and info.column:
+                    columns = lookup_columns(info)
+                    file_column = st.selectbox(
+                        f"Lookup column (CHCODE): {upload.name}", columns, index=columns.index(info.column),
+                        key=f"file_column_{index}_{upload.fingerprint}_{sheet}",
+                        help="Select the file column containing the CHCODE. Choose indexone_uid or primary_key according to this file's layout.",
+                    )
+                    info = replace(info, column=file_column)
                 source = UploadedSource(upload, sheet, info.column or "CHCODE", has_headers=has_headers)
                 if not info.column:
-                    status = "Missing CHCODE header"
+                    status = "Missing CHCODE or supported DataGrid email-blast key header"
                 elif not has_headers and mode == FULL_COPY:
                     status = "Headerless files need uploaded-row comparison"
-                elif has_headers and not find_header(info.headers, "FLOW_STAGE"):
+                elif (has_headers and not find_header(info.headers, "FLOW_STAGE")
+                      and not (mode == UPLOADED_ROWS and database_info and is_datagrid_pair(
+                          info.headers, database_info.headers, info.column, database_info.column))):
                     status = "Missing FLOW_STAGE header"
                 else:
                     status = "Ready"
@@ -294,17 +323,18 @@ def main():
         mapped_fields = mode == UPLOADED_ROWS
         if mapped_fields and database_info and not database_error:
             for (headers, file_key, has_headers), indices in layouts.items():
-                layout_id = hashlib.sha256(repr((database_upload.fingerprint, database_sheet, headers, file_key, has_headers)).encode("utf-8")).hexdigest()
+                layout_id = hashlib.sha256(repr((database_upload.fingerprint, database_sheet, database_info.column, headers, file_key, has_headers)).encode("utf-8")).hexdigest()
                 mappings = mapping_editor(headers, file_key, database_info, layout_id, len(indices), has_headers=has_headers)
                 for index in indices:
                     sources[index] = replace(sources[index], mappings=mappings)
-        st.caption("Files with headers need one FLOW_STAGE value, such as NO_REPLY. Headerless files use column B as CHCODE, include row 1, and are identified by filename.")
-        st.caption("The first row containing a CHCODE header is detected automatically; rows above it are skipped. Leave No headers unchecked when the header appears below the first row.")
+        st.caption("CHCODE campaign files with headers need one FLOW_STAGE value, such as NO_REPLY. Recognized DataGrid email blasts use their filenames in uploaded-row mode. Headerless files use column B as CHCODE and include row 1.")
+        st.caption("CHCODE and supported DataGrid header rows are detected automatically; rows above them are skipped. Leave No headers unchecked when the file has headers.")
+        st.caption("Check the lookup columns above. For DataGrid, use Old I.C. in the database and choose indexone_uid or primary_key in each email blast according to where its CHCODE is stored.")
         st.caption("Headerless files check CHCODE only by default. Edit comparison fields to map other columns. The database still needs headers.")
         st.caption("Uploads are processed on the app server in this session. Start over clears the current uploads and results.")
 
     if database_info and not database_error:
-        st.caption(f"Database: CHCODE header found on row {database_info.header_row}.")
+        st.caption(f"Database: {database_info.column} header found on row {database_info.header_row}.")
     if database_error:
         reset_results()
         st.error(f"Database: {database_error}")

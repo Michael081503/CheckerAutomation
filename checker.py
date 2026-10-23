@@ -68,6 +68,14 @@ class FileResult:
     flow_stage_column: str = ""
     flow_stage: str = ""
 
+    @property
+    def file_identifier(self) -> str:
+        return self.flow_stage or self.source.path.name
+
+    @property
+    def file_identifier_column(self) -> str:
+        return self.flow_stage_column or "Filename"
+
     def count(self, status: str) -> int:
         if status == "MISSING FROM FILE":
             return len(self.missing_rows)
@@ -113,6 +121,63 @@ def _has_chcode(values: Iterable) -> bool:
     return any(str(value).strip().casefold() == "chcode" for value in values if value is not None)
 
 
+def _header_names(values: Iterable) -> set[str]:
+    return {str(value).strip().casefold() for value in values if value is not None}
+
+
+def is_datagrid_database(headers: Iterable) -> bool:
+    """Recognize the supported DataGrid schema, rather than an arbitrary key name."""
+    names = _header_names(headers)
+    return {"name", "old i.c.", "account no.", "email"}.issubset(names)
+
+
+def is_datagrid_email_blast(headers: Iterable) -> bool:
+    """Recognize email-blast fields that have DataGrid counterparts."""
+    names = _header_names(headers)
+    return ({"email", "chname", "accountnumber"}.issubset(names)
+            and bool({"indexone_uid", "primary_key"} & names))
+
+
+def is_cbs_apd_email_blast(headers: Iterable) -> bool:
+    """Recognize the CBS APD layout whose primary_key contains the CHCODE."""
+    names = _header_names(headers)
+    return is_datagrid_email_blast(names) and {"primary_key", "campaignbucket"}.issubset(names)
+
+
+def match_column(headers: Iterable[str]) -> str:
+    """Select a supported schema's match key, preserving CHCODE precedence."""
+    headers = list(headers)
+    for header in headers:
+        if header.strip().casefold() == "chcode":
+            return header
+    if is_datagrid_database(headers):
+        return next(header for header in headers if header.strip().casefold() == "old i.c.")
+    if is_datagrid_email_blast(headers):
+        keys = ("primary_key", "indexone_uid") if is_cbs_apd_email_blast(headers) else ("indexone_uid", "primary_key")
+        for expected in keys:
+            for header in headers:
+                if header.strip().casefold() == expected:
+                    return header
+    return ""
+
+
+def is_datagrid_pair(file_headers: Iterable[str], database_headers: Iterable[str],
+                     file_key: str | None = None, database_key: str | None = None) -> bool:
+    """Allow the stage-less layout only with its corresponding DataGrid database."""
+    file_headers, database_headers = list(file_headers), list(database_headers)
+    file_key = match_column(file_headers) if file_key is None else file_key
+    database_key = match_column(database_headers) if database_key is None else database_key
+    return (not _has_chcode(file_headers) and not _has_chcode(database_headers)
+            and is_datagrid_email_blast(file_headers) and is_datagrid_database(database_headers)
+            and file_key.strip().casefold() in {"indexone_uid", "primary_key"}
+            and database_key.strip().casefold() == "old i.c.")
+
+
+def _has_supported_header(values: Iterable) -> bool:
+    values = list(values)
+    return _has_chcode(values) or is_datagrid_database(values) or is_datagrid_email_blast(values)
+
+
 def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
            headers_only: bool = False) -> Table:
     iterator = iter(rows)
@@ -139,16 +204,16 @@ def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
                      [(number, values + (None,) * (width - len(values))) for number, values in records],
                      header_row=None)
     header_row = 1
-    if not _has_chcode(first):
+    if not _has_supported_header(first):
         preamble = []
         for number, values in enumerate(iterator, 2):
-            if _has_chcode(values):
+            if _has_supported_header(values):
                 first = values
                 header_row = number
                 break
             preamble.append(values)
         else:
-            # Keep the generic reader's missing-key behavior when CHCODE is absent.
+            # Keep the generic reader's missing-key behavior for unknown layouts.
             iterator = iter(preamble)
     # Keep internal empty headers so column positions never shift.
     headers = [str(value).strip() if value is not None else "" for value in first]
@@ -196,11 +261,11 @@ def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = Fal
         delimiter = dialect.delimiter
         if has_headers:
             # Preambles with different row widths can defeat Sniffer. Recover
-            # the delimiter using the actual CHCODE header, including later rows.
+            # the delimiter using a supported header, including later rows.
             candidates = [delimiter, *(value for value in ",;\t|" if value != delimiter)]
             for candidate in candidates:
                 probe = csv.reader(io.StringIO(contents, newline=""), dialect, delimiter=candidate)
-                if any(_has_chcode(values) for values in probe):
+                if any(_has_supported_header(values) for values in probe):
                     delimiter = candidate
                     break
         reader = csv.reader(io.StringIO(contents, newline=""), dialect, delimiter=delimiter)
@@ -244,10 +309,24 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
         "product_type": ("PROD TYPE", "Product"),
         "ob_at_endorsement": ("OB", "Number"),
     }
+    datagrid_aliases = {}
+    if is_datagrid_pair(file_headers, database_headers, file_key, database_key):
+        datagrid_aliases = {
+            "indexone_uid": (database_key, "Text"),
+            "primary_key": (database_key, "Text"),
+            "chname": ("Name", "Text"),
+            "email": ("Email", "Text"),
+            "accountnumber": ("Account No.", "Text"),
+        }
+        if is_cbs_apd_email_blast(file_headers) and "account type" in database_names:
+            datagrid_aliases["campaignbucket"] = ("Account Type", "Text")
     mappings = []
     for name in file_headers:
         if name == file_key:
             mappings.append(ColumnMapping(name, database_key))
+        elif name.casefold() in datagrid_aliases:
+            expected, comparison = datagrid_aliases[name.casefold()]
+            mappings.append(ColumnMapping(name, database_names[expected.casefold()], comparison))
         elif name.casefold() in database_names:
             mappings.append(ColumnMapping(name, database_names[name.casefold()]))
         elif name.casefold() in aliases:
@@ -315,7 +394,7 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
             raise ValueError("FLOW_STAGE is the file identifier and must not be mapped to a database column.")
         mappings = [item for item in mappings if item.file_column != result.flow_stage_column]
     if not any(item.file_column == source.column and item.database_column == database.column for item in mappings):
-        raise ValueError("The CHCODE-to-CHCODE mapping is required.")
+        raise ValueError(f"The {source.column}-to-{database.column} mapping is required.")
     if len({item.file_column for item in mappings}) != len(mappings):
         raise ValueError("Each file column can have only one database mapping.")
     for item in mappings:
@@ -372,7 +451,7 @@ def check_files(database: Source, files: list[Source], options: Options,
                 progress: Callable[[int, int, FileResult], None] | None = None,
                 cancelled: Callable[[], bool] = lambda: False) -> list[FileResult]:
     if not database.has_headers:
-        raise ValueError("The database must have a header row containing CHCODE.")
+        raise ValueError("The database must have a header row containing CHCODE or the supported DataGrid fields.")
     table = read_table(database.path, database.sheet)
     if database.column not in table.headers:
         raise ValueError(f"Database column '{database.column}' no longer exists.")
@@ -396,7 +475,8 @@ def check_files(database: Source, files: list[Source], options: Options,
     if not lookup:
         raise ValueError("The database match column has no nonblank values.")
     if blank_rows:
-        raise ValueError(f"The database has blank CHCODEs at row(s) {', '.join(map(str, blank_rows[:20]))}. Fill these before comparing rows.")
+        key_name = "CHCODEs" if database.column.casefold() == "chcode" else f"values in '{database.column}'"
+        raise ValueError(f"The database has blank {key_name} at row(s) {', '.join(map(str, blank_rows[:20]))}. Fill these before comparing rows.")
     results = []
     for index, source in enumerate(files, 1):
         if cancelled():
@@ -411,6 +491,10 @@ def check_files(database: Source, files: list[Source], options: Options,
             result.headers = target.headers
             if source.column not in target.headers:
                 raise ValueError(f"Match column '{source.column}' no longer exists.")
+            if (options.mapped_fields and result.flow_stage_required
+                    and not find_header(target.headers, "FLOW_STAGE")
+                    and is_datagrid_pair(target.headers, table.headers, source.column, database.column)):
+                result.flow_stage_required = False
             if result.flow_stage_required:
                 _identify_flow_stage(target, result)
             if options.mapped_fields:

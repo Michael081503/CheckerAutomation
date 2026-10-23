@@ -36,13 +36,15 @@ These repository, entrypoint, and Python-version settings follow Streamlit's [of
 ## Use the deployed app
 
 1. Upload the database under **Add your database**.
-2. Upload multiple CSV or Excel files under **Add files to check**. Each uploaded file needs one consistent, nonblank `FLOW_STAGE` identifier.
-3. Select **Check files**. Default settings support campaign subsets and automatically map the seven HSBC fields.
+2. Upload multiple CSV or Excel files under **Add files to check**. HSBC files with headers need one consistent, nonblank `FLOW_STAGE` identifier. For the MSB or CBS PL email blast, upload the corresponding `DataGrid.xlsx` snapshot as the database; for the CBS APD email blast, upload `DataGrid (1).xlsx`. These supported email-blast layouts use the filename as their identifier.
+3. Select **Check files**. Default settings support campaign subsets and automatically map the HSBC or DataGrid fields.
 4. Read the compact pass/review results. Expand an individual file for its issues, row preview, or field coverage, then download the Excel report.
 
-**Advanced options** contains the optional comparison settings, worksheets, and **Edit comparison fields** controls. `FLOW_STAGE` identifies the file type, such as `NO_REPLY`, and is not compared to a database column. The database does not need a `FLOW_STAGE` header. **EXACT MATCH** means every uploaded row matches its database record across the mapped fields; a stage label alone does not establish a match. Other unmapped campaign fields are listed in the expanded field coverage and report.
+**Advanced options** contains the optional comparison settings, worksheets, lookup columns, and **Edit comparison fields** controls. **Database lookup column (CHCODE)** selects the database key, and **Lookup column (CHCODE): filename** selects each file's key. `FLOW_STAGE` identifies the file type, such as `NO_REPLY`, and is not compared to a database column. The database does not need a `FLOW_STAGE` header. **EXACT MATCH** means every uploaded row matches its database record across the mapped fields; a stage label alone does not establish a match. Other unmapped campaign fields are listed in the expanded field coverage and report.
 
-Upload, worksheet, mapping, or comparison-option changes invalidate old results. Run the check again after changes. Files with errors are reported while other files continue. A database error must be corrected before a check can run.
+DataGrid email blasts match their selected identifier to `Old I.C.` and compare both identifiers, email, name, and account number when present. The database key defaults to `Old I.C.`. Layouts with `campaignbucket` and `primary_key` default to `primary_key` for lookup, as needed by the supplied CBS APD file; the MSB layout defaults to `indexone_uid` when available. **For the CBS PL file, open Advanced options and explicitly select `indexone_uid` for the file's lookup column.** CBS PL and CBS APD share the same headers, so headers alone cannot establish which identifier contains CHCODE. `campaignbucket` is also compared with `Account Type` when that database column exists, giving both supplied CBS files six checked fields. Matching results show **MAPPED ROWS MATCH**; differing emails appear under **Issues** and in the report. `cc` and `bcc` remain unchecked unless mapped manually. Keep the column headers enabled for these files; the column B option is for files without headers.
+
+Upload, worksheet, lookup-column, mapping, or comparison-option changes invalidate old results. Run the check again after changes. Files with errors are reported while other files continue. A database error must be corrected before a check can run.
 
 The report includes all checked rows, individual cell differences, and field coverage. Full database copy mode instead includes missing database rows. Browser previews show up to 500 rows at a time.
 

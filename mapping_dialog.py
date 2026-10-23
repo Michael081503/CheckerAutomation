@@ -50,7 +50,7 @@ class MappingDialog(tk.Toplevel):
             self.fields.append((name, destination, comparison))
         ttk.Label(main, textvariable=self.coverage, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 4))
         ttk.Label(main, text="Number ignores commas. Product recognizes Credit Card / CARDS and Personal Loan / LOAN.", wraplength=830).pack(anchor="w")
-        ttk.Checkbutton(main, text="Apply to other uploaded files with the same headers", variable=self.apply_similar).pack(anchor="w", pady=8)
+        ttk.Checkbutton(main, text="Apply to other uploaded files with the same headers and lookup column", variable=self.apply_similar).pack(anchor="w", pady=8)
         footer = ttk.Frame(main)
         footer.pack(fill="x", pady=(8, 0))
         ttk.Button(footer, text="Use suggested mappings", command=self._suggest).pack(side="left")

@@ -8,7 +8,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from checker import Cancelled, Options, Source, check_files, export_report, read_table, sheet_names
+from checker import Cancelled, Options, Source, check_files, export_report, match_column, read_table, sheet_names
 from mapping_dialog import MappingDialog
 
 FILE_TYPES = [("Excel and CSV", "*.xlsx *.xlsm *.csv"), ("Excel workbook", "*.xlsx *.xlsm"), ("CSV", "*.csv")]
@@ -65,7 +65,7 @@ class CheckerApp(tk.Tk):
         main = ttk.Frame(self, padding=24)
         main.pack(fill="both", expand=True)
         ttk.Label(main, text="CHCODE Database Checker", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(main, text="Validate the rows in multiple files against your database, using CHCODE.", style="Sub.TLabel").pack(anchor="w", pady=(3, 18))
+        ttk.Label(main, text="Validate files against a CHCODE database or DataGrid export.", style="Sub.TLabel").pack(anchor="w", pady=(3, 18))
 
         database_row = ttk.Frame(main)
         database_row.pack(fill="x")
@@ -77,7 +77,10 @@ class CheckerApp(tk.Tk):
         self.db_sheet = ttk.Combobox(db_sheet_row, state="disabled", width=28)
         self.db_sheet.pack(side="left", padx=10)
         self.db_sheet.bind("<<ComboboxSelected>>", self._change_database_sheet)
-        ttk.Label(db_sheet_row, text="Required header: CHCODE", style="Sub.TLabel").pack(side="left", padx=8)
+        ttk.Label(db_sheet_row, text="Lookup column (CHCODE)").pack(side="left", padx=(8, 0))
+        self.db_key = ttk.Combobox(db_sheet_row, state="disabled", width=20)
+        self.db_key.pack(side="left", padx=10)
+        self.db_key.bind("<<ComboboxSelected>>", self._change_database_column)
 
         toolbar = ttk.Frame(main)
         toolbar.pack(fill="x", pady=(0, 8))
@@ -87,7 +90,7 @@ class CheckerApp(tk.Tk):
         ttk.Label(toolbar, text="Excel (.xlsx / .xlsm) and CSV", style="Sub.TLabel").pack(side="right")
 
         self.file_tree = self._tree(main, [
-            ("name", "File", 240), ("sheet", "Worksheet", 130), ("column", "CHCODE header", 120),
+            ("name", "File", 240), ("sheet", "Worksheet", 130), ("column", "Match header", 120),
             ("rows", "Rows", 65), ("matched", "Matched", 75), ("different", "Changed", 75),
             ("extra", "Extra", 65), ("missing", "Missing", 75), ("blank", "Blank", 65), ("status", "Comparison", 200),
         ], height=6)
@@ -98,6 +101,10 @@ class CheckerApp(tk.Tk):
         self.file_sheet = ttk.Combobox(selection_row, state="disabled", width=28)
         self.file_sheet.pack(side="left", padx=10)
         self.file_sheet.bind("<<ComboboxSelected>>", self._change_file_sheet)
+        ttk.Label(selection_row, text="Lookup column").pack(side="left")
+        self.file_key = ttk.Combobox(selection_row, state="disabled", width=18)
+        self.file_key.pack(side="left", padx=10)
+        self.file_key.bind("<<ComboboxSelected>>", self._change_file_column)
         self.mapping_button = self._button(selection_row, "Review field mappings", self._edit_mappings)
         self.mapping_button.pack(side="left")
 
@@ -136,7 +143,7 @@ class CheckerApp(tk.Tk):
                                   values=["All rows", "MATCHED", "DIFFERENT", "NOT FOUND", "EXTRA ROW", "BLANK KEY", "MISSING FROM FILE"], width=21, state="readonly")
         self.filter.pack(side="right")
         self.filter.bind("<<ComboboxSelected>>", lambda event: self._preview())
-        self.preview_tree = self._tree(main, [("row", "Source row", 90), ("code", "CHCODE", 250),
+        self.preview_tree = self._tree(main, [("row", "Source row", 90), ("code", "Match key", 250),
                                               ("result", "Result", 180), ("db", "Database row", 100),
                                               ("changes", "Differences (file value / database value)", 450)], height=6, expand=True)
         ttk.Label(main, text="Preview: up to 500 rows. Export includes every checked row, cell differences, and field coverage.", style="Sub.TLabel").pack(anchor="w", pady=(7, 3))
@@ -167,9 +174,12 @@ class CheckerApp(tk.Tk):
         self.export_button.configure(state="normal" if not self.busy and self.results else "disabled")
         self.cancel_button.configure(state="normal" if self.busy and self.running_check else "disabled")
         self.db_sheet.configure(state="readonly" if not self.busy and self.database else "disabled")
+        self.db_key.configure(state="readonly" if not self.busy and self.database and self.database['column'] else "disabled")
         self.file_sheet.configure(state="readonly" if not self.busy and len(self.file_tree.selection()) == 1 else "disabled")
         self.mode_combo.configure(state="disabled" if self.busy else "readonly")
         selected = self.file_tree.selection()
+        self.file_key.configure(state="readonly" if not self.busy and len(selected) == 1
+                                and self.files[selected[0]].get('column') else "disabled")
         can_map = (not self.busy and self.mode_value.get() == UPLOADED_ROWS and self.database
                    and self.database['column'] and len(selected) == 1
                    and self.files[selected[0]].get('column'))
@@ -217,13 +227,20 @@ class CheckerApp(tk.Tk):
         self.after(100, self._poll)
 
     @staticmethod
+    def _lookup_columns(item, *, database=False):
+        if not item.get('column'):
+            return []
+        names = {"chcode", "old i.c."} if database else {"chcode", "indexone_uid", "primary_key"}
+        return [name for name in item['headers'] if name.casefold() in names or name == item['column']]
+
+    @staticmethod
     def _inspect(path, sheet=None, sheets=None):
         names = sheets or sheet_names(path)
         table = read_table(path, sheet or names[0])
-        column = next((name for name in table.headers if name.casefold() == "chcode"), "")
+        column = match_column(table.headers)
         return {"path": Path(path), "sheet": table.sheet, "sheets": names,
                 "column": column, "headers": table.headers, "header_row": table.header_row,
-                "rows": len(table.rows), "error": "" if column else "Missing CHCODE header"}
+                "rows": len(table.rows), "error": "" if column else "Missing CHCODE header or supported DataGrid layout"}
 
     def _set_database(self, data):
         self.database = data
@@ -232,13 +249,15 @@ class CheckerApp(tk.Tk):
         self.db_label.set(str(data['path']))
         self.db_sheet.configure(values=data['sheets'])
         self.db_sheet.set(data['sheet'])
+        self.db_key.configure(values=self._lookup_columns(data, database=True))
+        self.db_key.set(data['column'])
         self._invalidate()
-        self.status.set(data['error'] or f"Database ready: CHCODE header found on row {data['header_row']}; {data['rows']:,} data rows. Add files to check.")
+        self.status.set(data['error'] or f"Database ready: {data['column']} header found on row {data['header_row']}; {data['rows']:,} data rows. Add files to check.")
         if data['error']:
-            messagebox.showwarning("CHCODE header required", "The selected database worksheet must have a CHCODE header. Headers below the first row are detected automatically. Choose another worksheet or correct the file.", parent=self)
+            messagebox.showwarning("Match header required", "Choose a worksheet with CHCODE, or a DataGrid export containing Old I.C., Name, Account No., and Email. Headers below the first row are detected automatically.", parent=self)
 
     def _choose_database(self):
-        path = filedialog.askopenfilename(title="Choose the CHCODE database", filetypes=FILE_TYPES, parent=self)
+        path = filedialog.askopenfilename(title="Choose the database", filetypes=FILE_TYPES, parent=self)
         if path:
             self._background(lambda: self._inspect(Path(path)), self._set_database, "Reading database…")
 
@@ -246,6 +265,13 @@ class CheckerApp(tk.Tk):
         data = self.database
         sheet = self.db_sheet.get()
         self._background(lambda: self._inspect(data['path'], sheet, data['sheets']), self._set_database, "Reading database worksheet…")
+
+    def _change_database_column(self, event=None):
+        if self.busy or not self.database:
+            return
+        column = self.db_key.get()
+        if column in self._lookup_columns(self.database, database=True) and column != self.database['column']:
+            self._set_database({**self.database, "column": column})
 
     def _add_files(self):
         paths = filedialog.askopenfilenames(title="Choose files to check (select multiple)", filetypes=FILE_TYPES, parent=self)
@@ -270,7 +296,7 @@ class CheckerApp(tk.Tk):
                 self.files[key] = item
                 self.file_tree.insert("", "end", iid=key, values=self._file_values(item))
             self._invalidate()
-            self.status.set(f"Added {len(items)} file(s). Files with missing CHCODE headers will be reported as errors.")
+            self.status.set(f"Added {len(items)} file(s). Files without a supported match header will be reported as errors.")
         self._background(inspect, done, "Reading selected files…")
 
     @staticmethod
@@ -298,13 +324,29 @@ class CheckerApp(tk.Tk):
             item = self.files[selected[0]]
             self.file_sheet.configure(values=item['sheets'])
             self.file_sheet.set(item['sheet'])
+            self.file_key.configure(values=self._lookup_columns(item))
+            self.file_key.set(item['column'])
             if item['error']:
                 self.status.set(f"{item['path'].name}: {item['error']}")
         else:
             self.file_sheet.set("")
+            self.file_key.configure(values=[])
+            self.file_key.set("")
         self._preview()
         self._update_coverage()
         self._refresh_controls()
+
+    def _change_file_column(self, event=None):
+        selected = self.file_tree.selection()
+        if self.busy or len(selected) != 1:
+            return
+        item = self.files[selected[0]]
+        column = self.file_key.get()
+        if column in self._lookup_columns(item) and column != item['column']:
+            item['column'] = column
+            item.pop('mappings', None)
+            self._invalidate()
+            self.status.set(f"Lookup column set to {column}. Run the check again to update results.")
 
     def _edit_mappings(self):
         selected = self.file_tree.selection()
@@ -314,7 +356,8 @@ class CheckerApp(tk.Tk):
 
         def save(mappings, apply_similar):
             for key, other in self.files.items():
-                if key == selected[0] or (apply_similar and other['headers'] == item['headers']):
+                if key == selected[0] or (apply_similar and other['headers'] == item['headers']
+                                         and other['column'] == item['column']):
                     other['mappings'] = mappings
             self._invalidate()
             self.status.set("Field mappings saved. Run the check again to update results.")

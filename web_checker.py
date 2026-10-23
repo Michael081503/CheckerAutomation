@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable
 
-from checker import ColumnMapping, FileResult, Options, Source, check_files, export_report, read_table, sheet_names
+from checker import ColumnMapping, FileResult, Options, Source, check_files, export_report, match_column, read_table, sheet_names
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ def inspect_upload(upload: Upload, sheet: str | None = None, *, has_headers: boo
         path = _write_upload(Path(folder), upload)
         names = sheet_names(path)
         table = read_table(path, sheet or names[0], headers_only=True, has_headers=has_headers)
-        column = next((name for name in table.headers if name.casefold() == "chcode"), "")
+        column = match_column(table.headers)
         return Inspection(tuple(names), table.sheet, tuple(table.headers), column, table.header_row)
 
 

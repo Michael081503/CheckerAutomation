@@ -43,6 +43,51 @@ def database_upload():
     return Upload("database.xlsx", stream.getvalue())
 
 
+def datagrid_upload():
+    return xlsx_upload("DataGrid.xlsx", [
+        ["DataGrid export"], [],
+        ["Name", "Old I.C.", "Account No.", "Email"],
+        ["Alice Smith", "00123", "001234567890", "alice@example.test"],
+        ["Bob Jones", "456", "009876543210", "bob@example.test"],
+    ])
+
+
+def email_blast_upload(name="email_blast.csv", *, changed=False):
+    return csv_upload(name, [
+        ["email", "cc", "bcc", "indexone_uid", "primary_key", "chname", "accountnumber"],
+        ["alice@example.test", "", "", "00123", "00123", "Alice Smith", "001234567890"],
+        ["bob@example.test", "", "", "456", "456", "Changed Name" if changed else "Bob Jones", "009876543210"],
+    ])
+
+
+def cbs_apd_uploads(*, total_rows=2, changed_emails=0, changed_secondary_uid=False):
+    database_rows = [
+        ["DataGrid export"], [],
+        ["Name", "Old I.C.", "Account No.", "Email", "Account Type"],
+    ]
+    blast_rows = [["email", "cc", "bcc", "indexone_uid", "primary_key", "chname", "accountnumber", "campaignbucket"]]
+    for index in range(total_rows):
+        key = f"{index + 1:05d}"
+        name = f"Account {index + 1}"
+        account = f"{index + 1:012d}"
+        email = f"account{index + 1}@example.test"
+        database_rows.append([name, key, account, email, "91-120"])
+        blast_rows.append([
+            f"changed{index + 1}@example.test" if index < changed_emails else email,
+            "", "", "secondary-only" if changed_secondary_uid and index == 0 else key,
+            key, name, account, "91-120",
+        ])
+    return xlsx_upload("DataGrid (1).xlsx", database_rows), csv_upload("CBS APD.csv", blast_rows)
+
+
+def cbs_pl_uploads():
+    return datagrid_upload(), csv_upload("CBS PL.csv", [
+        ["email", "cc", "bcc", "indexone_uid", "primary_key", "chname", "accountnumber", "campaignbucket"],
+        ["alice@example.test", "", "", "00123", "different-primary", "Alice Smith", "001234567890", "PL"],
+        ["bob@example.test", "", "", "456", "456", "Bob Jones", "009876543210", "PL"],
+    ])
+
+
 class WebCheckerTests(unittest.TestCase):
     def database(self):
         return UploadedSource(database_upload(), "Accounts", "CHCODE")
@@ -54,6 +99,96 @@ class WebCheckerTests(unittest.TestCase):
         self.assertEqual(info.headers[:2], ("CHCODE", "CHCode [2]"))
         self.assertEqual(info.header_row, 1)
         self.assertEqual(inspect_upload(database_upload(), "Other").column, "")
+
+    def test_datagrid_email_blast_inspection_and_download_preserve_key_and_filename(self):
+        upload = datagrid_upload()
+        database_info = inspect_upload(upload)
+        blast = email_blast_upload()
+        blast_info = inspect_upload(blast)
+        self.assertEqual(database_info.column, "Old I.C.")
+        self.assertEqual(database_info.header_row, 3)
+        self.assertEqual(blast_info.column, "indexone_uid")
+        self.assertEqual(blast_info.header_row, 1)
+        database = UploadedSource(upload, database_info.sheet, database_info.column)
+        source = UploadedSource(blast, blast_info.sheet, blast_info.column)
+        run = run_uploaded_check(database, [source], Options(mapped_fields=True, require_flow_stage=True))
+        result = run.results[0]
+        self.assertEqual(result.verdict, "MAPPED ROWS MATCH")
+        self.assertFalse(result.flow_stage_required)
+        self.assertEqual(result.file_identifier, "email_blast.csv")
+        self.assertEqual(result.ignored_columns, ["cc", "bcc"])
+        self.assertEqual(len(result.mappings), 5)
+        self.assertEqual([record[:3] for record in result.records], [(2, "MATCHED", "4"), (3, "MATCHED", "5")])
+        book = load_workbook(io.BytesIO(run.report))
+        try:
+            self.assertEqual(book["Summary"]["B9"].value, "email_blast.csv")
+            self.assertEqual(book["File 001"]["G2"].value, "00123")
+            self.assertEqual(book["File 001"]["G2"].data_type, "s")
+        finally:
+            book.close()
+
+    def test_cbs_apd_uses_primary_key_and_checks_bucket_in_downloadable_report(self):
+        database_upload, blast = cbs_apd_uploads()
+        database_info = inspect_upload(database_upload)
+        blast_info = inspect_upload(blast)
+        self.assertEqual(database_info.column, "Old I.C.")
+        self.assertEqual(blast_info.column, "primary_key")
+        database = UploadedSource(database_upload, database_info.sheet, database_info.column)
+        source = UploadedSource(blast, blast_info.sheet, blast_info.column)
+        run = run_uploaded_check(database, [source], Options(mapped_fields=True, require_flow_stage=True))
+        result = run.results[0]
+        self.assertEqual(result.verdict, "MAPPED ROWS MATCH")
+        self.assertFalse(result.flow_stage_required)
+        self.assertEqual(result.file_identifier, "CBS APD.csv")
+        self.assertEqual(result.ignored_columns, ["cc", "bcc"])
+        self.assertEqual(len(result.mappings), 6)
+        self.assertIn(ColumnMapping("campaignbucket", "Account Type"), result.mappings)
+        self.assertEqual([record[:3] for record in result.records], [(2, "MATCHED", "4"), (3, "MATCHED", "5")])
+        book = load_workbook(io.BytesIO(run.report))
+        try:
+            self.assertEqual(book["Summary"]["B1"].value, "DataGrid (1).xlsx")
+            self.assertEqual(book["Summary"]["B9"].value, "CBS APD.csv")
+            self.assertEqual(book["File 001"]["H2"].value, "00001")
+            self.assertEqual(book["File 001"]["H2"].data_type, "s")
+            coverage = {row[0]: row[1:4] for row in book["Mappings 001"].iter_rows(min_row=2, values_only=True)}
+            self.assertEqual(coverage["primary_key"], ("Old I.C.", "Text", "CHECKED"))
+            self.assertEqual(coverage["campaignbucket"], ("Account Type", "Text", "CHECKED"))
+            self.assertEqual(coverage["cc"][2], "NOT CHECKED")
+            self.assertEqual(coverage["bcc"][2], "NOT CHECKED")
+        finally:
+            book.close()
+
+    def test_cbs_apd_joins_primary_key_when_secondary_uid_differs(self):
+        database_upload, blast = cbs_apd_uploads(changed_secondary_uid=True)
+        database_info = inspect_upload(database_upload)
+        blast_info = inspect_upload(blast)
+        database = UploadedSource(database_upload, database_info.sheet, database_info.column)
+        source = UploadedSource(blast, blast_info.sheet, blast_info.column)
+        result = run_uploaded_check(database, [source], Options(mapped_fields=True, require_flow_stage=True)).results[0]
+        self.assertEqual(result.source.column, "primary_key")
+        self.assertFalse(result.error)
+        self.assertEqual([record[:3] for record in result.records], [(2, "DIFFERENT", "4"), (3, "MATCHED", "5")])
+        self.assertEqual(len(result.differences), 1)
+        difference = result.differences[0]
+        self.assertEqual(difference[:2], (2, 4))
+        self.assertTrue(difference[2].startswith("indexone_uid"))
+        self.assertEqual(difference[3:], ("secondary-only", "00001"))
+
+    def test_cbs_pl_explicit_uid_key_joins_old_ic_and_checks_secondary_identifier(self):
+        upload, blast = cbs_pl_uploads()
+        database_info = inspect_upload(upload)
+        blast_info = inspect_upload(blast)
+        self.assertEqual(blast_info.column, "primary_key")
+        database = UploadedSource(upload, database_info.sheet, database_info.column)
+        source = UploadedSource(blast, blast_info.sheet, "indexone_uid")
+        result = run_uploaded_check(database, [source], Options(mapped_fields=True, require_flow_stage=True)).results[0]
+        self.assertFalse(result.error)
+        self.assertEqual(result.source.column, "indexone_uid")
+        self.assertEqual([record[:3] for record in result.records], [(2, "DIFFERENT", "4"), (3, "MATCHED", "5")])
+        self.assertEqual(result.count("NOT FOUND"), 0)
+        self.assertEqual(len(result.differences), 1)
+        self.assertTrue(result.differences[0][2].startswith("primary_key"))
+        self.assertEqual(result.differences[0][3:], ("different-primary", "00123"))
 
     def test_database_header_after_preamble_preserves_database_row_numbers(self):
         for make_upload, suffix in ((csv_upload, "csv"), (xlsx_upload, "xlsx")):
@@ -297,6 +432,10 @@ class WebCheckerTests(unittest.TestCase):
         self.assertNotEqual(signature, configuration_signature(database, [changed_mapping], Options(mapped_fields=True)))
         changed_headers = UploadedSource(first.upload, first.sheet, first.column, has_headers=False)
         self.assertNotEqual(signature, configuration_signature(database, [changed_headers], Options(mapped_fields=True)))
+        changed_file_key = UploadedSource(first.upload, first.sheet, "primary_key")
+        self.assertNotEqual(signature, configuration_signature(database, [changed_file_key], Options(mapped_fields=True)))
+        changed_database_key = UploadedSource(database.upload, database.sheet, "Old I.C.")
+        self.assertNotEqual(signature, configuration_signature(changed_database_key, [first], Options(mapped_fields=True)))
 
     def test_temporary_uploads_are_removed_after_success_and_failure(self):
         original = tempfile.TemporaryDirectory

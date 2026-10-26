@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from checker import Options, find_header
+from checker import Options, find_header, is_customer_name_column, is_datagrid_viber_blast, phone_column
 from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check
 
 PREVIEW_LIMIT = 500
@@ -126,6 +126,13 @@ def render_file_details(result, run, index):
             st.caption("Only CHCODE in column B is checked for headerless files. Other columns are not checked.")
         else:
             st.caption("Results cover the compared fields. Unmapped campaign fields are not checked.")
+            if any(is_customer_name_column(item.file_column) or is_customer_name_column(item.database_column)
+                   for item in result.mappings):
+                st.caption("Question marks are ignored when comparing customer names. Original names are kept in the report.")
+            if is_datagrid_viber_blast(result.headers) and result.source.column.casefold() == "phone":
+                st.caption("Phone is matched to DataGrid Last Called No.; FullName must match Name on the same database row. CHCode and campaign amounts are not checked.")
+            elif not result.flow_stage_column and phone_column(result.headers):
+                st.caption("Phone numbers are compared with the database record for the same CHCODE.")
         st.caption(f"File identifier: {result.file_identifier}")
         st.dataframe(coverage, hide_index=True, width="stretch")
 
@@ -215,7 +222,11 @@ def main():
                 "Worksheet": item.source.sheet,
                 "Header row": (str(info.header_row) if info and item.source.has_headers
                                else "No headers" if info else ""),
-                "CHCODE column": item.source.column if info else "",
+                "Lookup column": item.source.column if info else "",
+                "Check": ("Viber phone and name" if info and is_datagrid_viber_blast(info.headers)
+                          else "Phone by CHCODE" if info and info.has_headers
+                          and not find_header(info.headers, "FLOW_STAGE") and phone_column(info.headers)
+                          else "Mapped fields"),
                 "Status": item.error or "Ready",
             })
         st.dataframe(summary, hide_index=True, width="stretch")
@@ -235,6 +246,8 @@ def main():
     elif prepared and not prepared.database_error and not prepared.files:
         st.caption("Add at least one file to check.")
     st.caption("CHCODE can be in CHCODE, primary_key, or indexone_uid. The lookup column is detected automatically. Headerless files use column B and include row 1; only CHCODE is checked.")
+    st.caption("Files without FLOW_STAGE use CHCODE to compare phone numbers with the matching database record.")
+    st.caption("SALAD Viber blasts use Phone and FullName to check the same DataGrid row.")
     st.caption("Uploads are processed in this session. Start over clears the current uploads and results.")
 
     options = Options(ignore_case=True, trim_spaces=True, mapped_fields=True,

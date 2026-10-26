@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
+from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
 from test_web_checker import cbs_apd_uploads, cbs_pl_uploads, csv_upload, database_upload, datagrid_upload, email_blast_upload, hsbc_mobile_uploads, xlsx_upload
 
 
@@ -40,7 +41,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertFalse(self.app.exception)
 
     def detection_rows(self):
-        return next(item.value for item in self.app.dataframe if "CHCODE column" in item.value.columns)
+        return next(item.value for item in self.app.dataframe if "Lookup column" in item.value.columns)
 
     def test_uploads_detect_layouts_without_manual_options(self):
         self.app.run()
@@ -51,7 +52,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertFalse(any(item.label == "Advanced options" for item in self.app.expander))
         summary = self.detection_rows()
         self.assertEqual(summary.iloc[0]["Header row"], "1")
-        self.assertEqual(summary.iloc[0]["CHCODE column"], "ChCode")
+        self.assertEqual(summary.iloc[0]["Lookup column"], "ChCode")
         self.assertEqual(summary.iloc[0]["Status"], "Ready")
 
     def test_no_database_displays_upload_guidance(self):
@@ -110,7 +111,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.app.run()
         self.assertFalse(self.app.exception)
         self.assertNotIn("check_run", self.app.session_state)
-        self.assertEqual(self.detection_rows().iloc[0]["CHCODE column"], "primary_key")
+        self.assertEqual(self.detection_rows().iloc[0]["Lookup column"], "primary_key")
         self.app.button(key="run_check").click().run()
         self.assertEqual(self.app.session_state["check_run"].results[0].source.column, "primary_key")
 
@@ -167,7 +168,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertFalse(self.app.error)
         result = self.app.session_state["check_run"].results[0]
         self.assertEqual(result.source.column, "primary_key")
-        self.assertEqual(self.detection_rows().iloc[0]["CHCODE column"], "primary_key")
+        self.assertEqual(self.detection_rows().iloc[0]["Lookup column"], "primary_key")
         self.assertEqual(result.count("MATCHED"), 1)
         self.assertEqual(result.count("DIFFERENT"), 11)
         self.assertEqual(len(result.mappings), 6)
@@ -189,7 +190,7 @@ class StreamlitAppTests(unittest.TestCase):
         result = self.app.session_state["check_run"].results[0]
         self.assertFalse(result.error)
         self.assertEqual(result.source.column, "indexone_uid")
-        self.assertEqual(self.detection_rows().iloc[0]["CHCODE column"], "indexone_uid")
+        self.assertEqual(self.detection_rows().iloc[0]["Lookup column"], "indexone_uid")
         self.assertEqual(result.count("NOT FOUND"), 0)
         self.assertEqual(result.count("DIFFERENT"), 1)
         self.assertEqual(result.count("MATCHED"), 1)
@@ -232,7 +233,69 @@ class StreamlitAppTests(unittest.TestCase):
         coverage_frames = [item.value for item in self.app.dataframe if "Coverage" in item.value.columns]
         self.assertEqual(len(coverage_frames), 2)
         self.assertTrue(all(all(frame["Coverage"] == "CHECKED") for frame in coverage_frames))
+        self.assertTrue(all(result.source.column == "ChCode" for result in run.results))
+        self.assertTrue(any("Phone numbers are compared with the database record for the same CHCODE" in caption.value
+                            for caption in self.app.caption))
         self.assertEqual(len(self.app.get("download_button")), 1)
+
+    def test_phone_upload_without_stage_shows_wrong_account_phone_and_blank_numbers(self):
+        self.database = BrowserFile(xlsx_upload("phones.xlsx", [
+            ["CHCODE", "Mobile phone"], ["00123", "+639171234567"],
+            ["456", "+639181234567"],
+        ]))
+        self.files = [BrowserFile(csv_upload("phone_blast.csv", [
+            ["Phone Number", "CHCODE"],
+            ["09171234567", "00123"],
+            ["09181234567", "00123"],
+            ["", "00123"],
+            ["09171234567", "unknown"],
+            ["09171234567", ""],
+        ]))]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual(result.source.column, "CHCODE")
+        self.assertEqual(result.count("MATCHED"), 1)
+        self.assertEqual(result.count("DIFFERENT"), 2)
+        self.assertEqual(result.count("NOT FOUND"), 1)
+        self.assertEqual(result.count("BLANK KEY"), 1)
+        self.assertEqual(self.detection_rows().iloc[0]["Lookup column"], "CHCODE")
+        self.assertEqual(self.detection_rows().iloc[0]["Check"], "Phone by CHCODE")
+        self.assertTrue(all(difference[1] == 2 for difference in result.differences))
+        issue_rows = next(item.value for item in self.app.dataframe if "Issue" in item.value.columns)
+        self.assertEqual(list(issue_rows["Issue"]), ["NOT FOUND", "BLANK KEY"])
+        self.assertEqual(len(self.app.get("download_button")), 1)
+
+    def test_salad_viber_blasts_automatically_check_phone_and_name_with_datagrid(self):
+        database, blasts = salad_viber_uploads(changed_name=True)
+        self.database = BrowserFile(database)
+        self.files = [BrowserFile(blast) for blast in blasts]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        run = self.app.session_state["check_run"]
+        self.assertEqual([result.count("MATCHED") for result in run.results], [2, 2, 1])
+        self.assertEqual([result.count("DIFFERENT") for result in run.results], [0, 0, 1])
+        self.assertTrue(all(result.database_match_column == "Last Called No." for result in run.results))
+        summary = self.detection_rows()
+        self.assertEqual(list(summary["Lookup column"]), ["Phone"] * 3)
+        self.assertEqual(list(summary["Check"]), ["Viber phone and name"] * 3)
+        coverage = [frame.value for frame in self.app.dataframe if "Coverage" in frame.value.columns]
+        self.assertEqual(len(coverage), 3)
+        self.assertTrue(all(list(frame["Coverage"]).count("CHECKED") == 2 for frame in coverage))
+        self.assertTrue(any("FullName must match Name on the same database row" in caption.value
+                            for caption in self.app.caption))
+        self.assertEqual(len(self.app.get("download_button")), 1)
+
+    def test_customer_names_ignore_question_marks_and_show_the_rule(self):
+        self.database = BrowserFile(salad_database())
+        self.files = [BrowserFile(csv_upload("viber.csv", [BLAST_HEADERS, salad_row("Al?ice Smith??")]))]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        self.assertFalse(self.app.warning)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual(result.count("MATCHED"), 1)
+        self.assertEqual(result.differences, [])
+        self.assertTrue(any("Question marks are ignored" in caption.value for caption in self.app.caption))
 
     def test_headerless_file_preserves_row_one_and_checks_column_b(self):
         self.files = [BrowserFile(csv_upload("no_headers.csv", [

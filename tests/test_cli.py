@@ -11,6 +11,7 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 
 from scripts.check_files import main
+from test_sbf_salad_viber import salad_viber_uploads
 from test_web_checker import hsbc_mobile_uploads
 
 
@@ -68,6 +69,21 @@ class CommandLineTests(unittest.TestCase):
             book.close()
         self.assertEqual(self.database.read_bytes(), original_database)
         self.assertEqual(self.target.read_bytes(), original_target)
+
+    def test_salad_viber_cli_reports_the_actual_phone_lookup(self):
+        database, files = salad_viber_uploads()
+        self.database.write_bytes(database.data)
+        paths = []
+        for upload in files:
+            path = self.folder / upload.name
+            path.write_bytes(upload.data)
+            paths.append(path)
+        exit_code, results = self.run_cli(files=paths)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(row["file_key"] == "Phone" and row["database_key"] == "Last Called No."
+                            for row in results))
+        self.assertTrue(all(row["matched"] == 2 and row["checked_fields"] == 2 for row in results))
 
     def test_default_bucket_lookup_remains_primary_key(self):
         exit_code, results = self.run_cli()

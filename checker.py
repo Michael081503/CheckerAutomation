@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import re
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
 from itertools import chain
@@ -16,6 +16,11 @@ from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
+PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
+                 "phone", "mobile", "contactnumber", "lastcalledno")
+CUSTOMER_NAME_ALIASES = {"name", "fullname", "chname", "chnameformat", "firstname",
+                         "middlename", "lastname", "surname", "givenname", "customername",
+                         "customerfullname", "debtorname", "borrowername", "accountname"}
 
 
 @dataclass
@@ -71,6 +76,7 @@ class FileResult:
     flow_stage_required: bool = False
     flow_stage_column: str = ""
     flow_stage: str = ""
+    database_match_column: str = ""
 
     @property
     def file_identifier(self) -> str:
@@ -136,6 +142,12 @@ def chcode_columns(headers: Iterable[str]) -> list[str]:
             if header.strip().casefold() == alias]
 
 
+def phone_column(headers: Iterable[str]) -> str:
+    """Find a named phone column, accepting spaces, underscores and letter case."""
+    names = {re.sub(r"[^a-z0-9]", "", header.casefold()): header for header in headers}
+    return next((names[alias] for alias in PHONE_ALIASES if alias in names), "")
+
+
 def is_datagrid_database(headers: Iterable) -> bool:
     """Recognize the supported DataGrid schema, rather than an arbitrary key name."""
     names = _header_names(headers)
@@ -149,6 +161,12 @@ def is_datagrid_email_blast(headers: Iterable) -> bool:
             and bool(set(CHCODE_ALIASES[1:]) & names))
 
 
+def is_datagrid_viber_blast(headers: Iterable) -> bool:
+    """Recognize SALAD Viber exports whose CHCode contains campaign labels."""
+    return {"fullname", "firstname", "lastname", "phone", "chcode", "ob", "monthly",
+            "terms", "promo", "level endo"}.issubset(_header_names(headers))
+
+
 def is_cbs_apd_email_blast(headers: Iterable) -> bool:
     """Recognize the CBS APD layout whose primary_key contains the CHCODE."""
     names = _header_names(headers)
@@ -158,6 +176,8 @@ def is_cbs_apd_email_blast(headers: Iterable) -> bool:
 def match_column(headers: Iterable[str]) -> str:
     """Select the CHCODE key, including aliases in ordinary header layouts."""
     headers = list(headers)
+    if is_datagrid_viber_blast(headers):
+        return next(header for header in headers if header.strip().casefold() == "phone")
     for header in headers:
         if header.strip().casefold() == "chcode":
             return header
@@ -185,6 +205,17 @@ def is_datagrid_pair(file_headers: Iterable[str], database_headers: Iterable[str
             and database_key.strip().casefold() == "old i.c.")
 
 
+def is_datagrid_viber_pair(file_headers: Iterable[str], database_headers: Iterable[str],
+                           file_key: str | None = None, database_key: str | None = None) -> bool:
+    file_headers, database_headers = list(file_headers), list(database_headers)
+    file_key = match_column(file_headers) if file_key is None else file_key
+    database_key = match_column(database_headers) if database_key is None else database_key
+    return (is_datagrid_viber_blast(file_headers) and is_datagrid_database(database_headers)
+            and "last called no." in _header_names(database_headers)
+            and file_key.strip().casefold() == "phone"
+            and database_key.strip().casefold() in {"old i.c.", "last called no."})
+
+
 def is_hsbc_mobile_pair(file_headers: Iterable[str], database_headers: Iterable[str],
                         file_key: str | None = None, database_key: str | None = None) -> bool:
     """Recognize the HSBC mobile blast and the database fields it validates."""
@@ -204,6 +235,7 @@ def is_filename_identified_pair(file_headers: Iterable[str], database_headers: I
     """Supported mapped layouts may use filenames when FLOW_STAGE is absent."""
     file_headers, database_headers = list(file_headers), list(database_headers)
     return (is_datagrid_pair(file_headers, database_headers, file_key, database_key)
+            or is_datagrid_viber_pair(file_headers, database_headers, file_key, database_key)
             or is_hsbc_mobile_pair(file_headers, database_headers, file_key, database_key))
 
 
@@ -212,7 +244,7 @@ def _has_supported_header(values: Iterable) -> bool:
     names = _header_names(values)
     identifier_layout = bool(names & set(CHCODE_ALIASES[1:])) and bool(
         names & {"flow_stage", "name", "email", "chname", "accountnumber"})
-    return (_has_chcode(values) or is_datagrid_database(values)
+    return (_has_chcode(values) or bool(phone_column(names)) or is_datagrid_database(values)
             or is_datagrid_email_blast(values) or identifier_layout)
 
 
@@ -352,6 +384,8 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
         "ob_at_endorsement": ("OB", "Number"),
     }
     datagrid_aliases = {}
+    if is_datagrid_viber_pair(file_headers, database_headers, file_key, database_key):
+        datagrid_aliases["fullname"] = ("Name", "Text")
     if is_datagrid_pair(file_headers, database_headers, file_key, database_key):
         datagrid_aliases = {
             "indexone_uid": (database_key, "Text"),
@@ -367,7 +401,12 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
     mappings = []
     for name in file_headers:
         if name == file_key:
-            mappings.append(ColumnMapping(name, database_key))
+            comparison = "Phone" if phone_column([name]) and phone_column([database_key]) else "Text"
+            mappings.append(ColumnMapping(name, database_key, comparison))
+        elif phone_column([name]):
+            expected = database_names.get(name.casefold()) or phone_column(database_headers)
+            if expected:
+                mappings.append(ColumnMapping(name, expected, "Phone"))
         elif name.casefold() in datagrid_aliases:
             expected, comparison = datagrid_aliases[name.casefold()]
             mappings.append(ColumnMapping(name, database_names[expected.casefold()], comparison))
@@ -380,7 +419,14 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
     return mappings
 
 
-def compare_value(value, comparison: str, options: Options) -> str:
+def is_customer_name_column(header: str) -> bool:
+    name = re.sub(r"\s+\[\d+\]$", "", header.strip())
+    return re.sub(r"[^a-z0-9]", "", name.casefold()) in CUSTOMER_NAME_ALIASES
+
+
+def compare_value(value, comparison: str, options: Options, *, customer_name: bool = False) -> str:
+    if comparison == "Text" and customer_name and isinstance(value, str):
+        value = value.replace("?", "")
     if comparison == "Phone":
         text = normalize(value, options)
         if re.fullmatch(r"[+0-9()\s-]+", text):
@@ -460,10 +506,17 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
     if not target.rows:
         raise ValueError("The selected file has column headers but no data rows to validate.")
     positions = [(target.headers.index(item.file_column), table.headers.index(item.database_column), item) for item in mappings]
+    customer_name_fields = {item.file_column for item in mappings
+                            if is_customer_name_column(item.file_column) or is_customer_name_column(item.database_column)}
     database_rows = dict(table.rows)
     # An uploaded row is validated independently; database rows may be reused by
     # repeated uploaded CHCODEs and by separate campaign files.
     key_position = target.headers.index(source.column)
+    key_mapping = next(item for item in mappings if item.file_column == source.column
+                       and item.database_column == database.column)
+    required_phone = (phone_column(target.headers) if options.allow_missing_flow_stage
+                      and source.has_headers and not find_header(target.headers, "FLOW_STAGE") else "")
+    phone_position = target.headers.index(required_phone) if required_phone else None
     database_signatures = {}
     exact = {}
     for key, numbers in lookup.items():
@@ -471,15 +524,23 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
             raise Cancelled()
         for number in numbers:
             values = database_rows[number]
-            signature = tuple(compare_value(values[db_pos], item.comparison, options) for _, db_pos, item in positions)
+            signature = tuple(compare_value(values[db_pos], item.comparison, options,
+                                             customer_name=item.file_column in customer_name_fields)
+                              for _, db_pos, item in positions)
             database_signatures[number] = signature
             exact.setdefault((key, signature), number)
     for row_number, values in target.rows:
         if cancelled():
             raise Cancelled()
-        key = normalize(values[key_position], options)
-        signature = tuple(compare_value(values[file_pos], item.comparison, options) for file_pos, _, item in positions)
+        key = compare_value(values[key_position], key_mapping.comparison, options,
+                            customer_name=key_mapping.file_column in customer_name_fields)
+        signature = tuple(compare_value(values[file_pos], item.comparison, options,
+                                         customer_name=item.file_column in customer_name_fields)
+                          for file_pos, _, item in positions)
         matched = exact.get((key, signature))
+        blank_phone = phone_position is not None and not normalize(values[phone_position], options)
+        if blank_phone:
+            matched = None
         if not key:
             status = "BLANK KEY"
         elif key not in lookup:
@@ -493,9 +554,14 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
             expected = database_rows[matched]
             for file_pos, db_pos, item in positions:
                 actual, wanted = values[file_pos], expected[db_pos]
-                if compare_value(actual, item.comparison, options) != compare_value(wanted, item.comparison, options):
+                name_field = item.file_column in customer_name_fields
+                if (compare_value(actual, item.comparison, options, customer_name=name_field)
+                        != compare_value(wanted, item.comparison, options, customer_name=name_field)):
                     label = item.file_column if item.file_column == item.database_column else f"{item.file_column} → {item.database_column}"
                     result.differences.append((row_number, matched, label, actual, wanted))
+                elif blank_phone and item.file_column == required_phone:
+                    label = item.file_column if item.file_column == item.database_column else f"{item.file_column} → {item.database_column}"
+                    result.differences.append((row_number, matched, label, actual, "(phone number required)"))
         result.records.append((row_number, status, str(matched) if matched is not None else "", values))
 
 
@@ -508,6 +574,7 @@ def check_files(database: Source, files: list[Source], options: Options,
     if database.column not in table.headers:
         raise ValueError(f"Database column '{database.column}' no longer exists.")
     comparison_headers = [name for name in table.headers if not (options.require_flow_stage and name.casefold() == "flow_stage")]
+    customer_name_columns = {name for name in comparison_headers if is_customer_name_column(name)}
     comparison_positions = [table.headers.index(name) for name in comparison_headers]
     position = table.headers.index(database.column)
     lookup: dict[str, list[int]] = {}
@@ -517,11 +584,13 @@ def check_files(database: Source, files: list[Source], options: Options,
     for row_number, values in table.rows:
         if cancelled():
             raise Cancelled()
-        key = normalize(values[position], options)
+        key = compare_value(values[position], "Text", options, customer_name=database.column in customer_name_columns)
         if key:
             lookup.setdefault(key, []).append(row_number)
             if not options.mapped_fields:
-                signatures[row_number] = tuple(normalize(values[index], options) for index in comparison_positions)
+                signatures[row_number] = tuple(compare_value(values[index], "Text", options,
+                                                              customer_name=table.headers[index] in customer_name_columns)
+                                               for index in comparison_positions)
         else:
             blank_rows.append(row_number)
     if not lookup:
@@ -530,12 +599,14 @@ def check_files(database: Source, files: list[Source], options: Options,
         key_name = "CHCODEs" if database.column.casefold() == "chcode" else f"values in '{database.column}'"
         raise ValueError(f"The database has blank {key_name} at row(s) {', '.join(map(str, blank_rows[:20]))}. Fill these before comparing rows.")
     results = []
+    viber_lookup = None
     for index, source in enumerate(files, 1):
         if cancelled():
             raise Cancelled()
         result = FileResult(source, [], [], database_headers=table.headers,
                             comparison_mode="Uploaded rows" if options.mapped_fields else "Full database copy",
-                            flow_stage_required=options.require_flow_stage and source.has_headers)
+                            flow_stage_required=options.require_flow_stage and source.has_headers,
+                            database_match_column=database.column)
         try:
             if source.detection_error:
                 raise ValueError(source.detection_error)
@@ -545,6 +616,30 @@ def check_files(database: Source, files: list[Source], options: Options,
             result.headers = target.headers
             if source.column not in target.headers:
                 raise ValueError(f"Match column '{source.column}' no longer exists.")
+            comparison_database, comparison_lookup = database, lookup
+            if (options.mapped_fields and is_datagrid_viber_blast(target.headers)
+                    and source.column.casefold() == "phone"):
+                if not is_datagrid_viber_pair(target.headers, table.headers, source.column, database.column):
+                    raise ValueError("SALAD Viber checks require a DataGrid database with Name, Old I.C., Account No., Email, and Last Called No. columns, using Old I.C. or Last Called No. as its database key.")
+                database_phone = find_header(table.headers, "Last Called No.")
+                comparison_database = replace(database, column=database_phone)
+                result.database_match_column = database_phone
+                if viber_lookup is None:
+                    viber_lookup = {}
+                    phone_position = table.headers.index(database_phone)
+                    for number, values in table.rows:
+                        if cancelled():
+                            raise Cancelled()
+                        phone = compare_value(values[phone_position], "Phone", options)
+                        if phone:
+                            viber_lookup.setdefault(phone, []).append(number)
+                if not viber_lookup:
+                    raise ValueError("The database Last Called No. column has no nonblank phone numbers.")
+                comparison_lookup = viber_lookup
+            if (options.mapped_fields and options.allow_missing_flow_stage and source.has_headers
+                    and not find_header(target.headers, "FLOW_STAGE") and phone_column(target.headers)
+                    and not phone_column(table.headers)):
+                raise ValueError("The file has no FLOW_STAGE and contains phone numbers, but the database has no supported phone column.")
             if (options.mapped_fields and result.flow_stage_required
                     and not find_header(target.headers, "FLOW_STAGE")
                     and (options.allow_missing_flow_stage or is_filename_identified_pair(
@@ -553,7 +648,7 @@ def check_files(database: Source, files: list[Source], options: Options,
             if result.flow_stage_required:
                 _identify_flow_stage(target, result)
             if options.mapped_fields:
-                _compare_mapped(table, target, database, source, result, options, lookup, cancelled)
+                _compare_mapped(table, target, comparison_database, source, result, options, comparison_lookup, cancelled)
                 results.append(result)
                 if progress:
                     progress(index, len(files), result)
@@ -577,7 +672,9 @@ def check_files(database: Source, files: list[Source], options: Options,
                 for number, values in target.rows:
                     if cancelled():
                         raise Cancelled()
-                    signature = tuple(normalize(values[target_columns[name.casefold()]], options) for name in comparison_headers)
+                    signature = tuple(compare_value(values[target_columns[name.casefold()]], "Text", options,
+                                                      customer_name=name in customer_name_columns)
+                                      for name in comparison_headers)
                     candidates = available.get(signature)
                     if candidates:
                         matched = candidates.popleft()
@@ -588,7 +685,8 @@ def check_files(database: Source, files: list[Source], options: Options,
             for row_number, values in target.rows:
                 if cancelled():
                     raise Cancelled()
-                key = normalize(values[target_position], options)
+                key = compare_value(values[target_position], "Text", options,
+                                    customer_name=database.column in customer_name_columns)
                 matched = exact.get(row_number)
                 if matched is not None:
                     status = "MATCHED"
@@ -608,7 +706,9 @@ def check_files(database: Source, files: list[Source], options: Options,
                             result.differences.append((row_number, matched, name, "(missing column)", expected_value))
                         else:
                             actual = values[target_columns[name_key]]
-                            if normalize(actual, options) != normalize(expected_value, options):
+                            name_field = name in customer_name_columns
+                            if (compare_value(actual, "Text", options, customer_name=name_field)
+                                    != compare_value(expected_value, "Text", options, customer_name=name_field)):
                                 result.differences.append((row_number, matched, name, actual, expected_value))
                     for name in result.extra_columns:
                         result.differences.append((row_number, matched, name, values[target_columns[name.casefold()]], "(no database column)"))
@@ -651,7 +751,7 @@ def export_report(path: Path, database: Source, options: Options, results: list[
     append(summary, ["File", "Full path", "Sheet", "Match column", "Rows", "Matched rows", "Not found", "Blank key", "Error", "Report sheet",
                      "Comparison", "Different rows", "Extra rows", "Missing database rows", "Missing columns", "Extra columns", "Differences sheet", "Missing rows sheet",
                      "Scope", "Fields checked", "Unchecked file columns", "Mappings sheet",
-                     "FLOW_STAGE", "File identifier column"])
+                     "FLOW_STAGE", "File identifier column", "Database match column"])
     for index, result in enumerate(results, 1):
         name = f"File {index:03d}"
         append(summary, [result.source.path.name, str(result.source.path), result.source.sheet,
@@ -663,7 +763,7 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                          result.comparison_mode,
                          "; ".join(f"{item.file_column} → {item.database_column} ({item.comparison})" for item in result.mappings),
                          ", ".join(result.ignored_columns), f"Mappings {index:03d}" if result.comparison_mode == "Uploaded rows" else "",
-                         result.flow_stage, result.flow_stage_column])
+                         result.flow_stage, result.flow_stage_column, result.database_match_column or database.column])
         detail = book.create_sheet(name)
         detail.freeze_panes = "D2"
         append(detail, ["Source row", "Result", "Database row(s)", *result.headers])
@@ -690,7 +790,12 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                 else:
                     rule = {"Text": "Uses case and space options", "Number": "Numeric equality; commas ignored",
                             "Product": "Credit Card = CARDS; Personal Loan = LOAN",
-                            "Phone": "Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison"}[item.comparison]
+                            "Phone": "Matches the phone number for the same CHCODE; Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison"}[item.comparison]
+                    if item.comparison == "Phone" and item.file_column == result.source.column:
+                        rule = "Finds database rows by phone; all mapped fields must match the same row. Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison"
+                    if item.comparison == "Text" and (is_customer_name_column(item.file_column)
+                                                      or is_customer_name_column(item.database_column)):
+                        rule += "; question marks are ignored in customer names"
                     append(mapping_sheet, [header, item.database_column, item.comparison, "CHECKED", rule])
         else:
             missing = book.create_sheet(f"Missing {index:03d}")

@@ -15,10 +15,10 @@ from typing import Callable
 
 from checker import (
     CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, check_files, chcode_columns, export_report,
-    find_header, match_column, normalize, read_table, sheet_names,
+    find_header, is_datagrid_viber_blast, match_column, normalize, phone_column, read_table, sheet_names,
 )
 
-AUTO_DETECTION_VERSION = 3
+AUTO_DETECTION_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -101,6 +101,8 @@ def inspect_upload(upload: Upload, sheet: str | None = None, *, has_headers: boo
 
 def _key_column(table: Table, database_keys: set[str]) -> tuple[str, str]:
     """Choose one lookup for the entire file; unmatched rows never switch keys."""
+    if is_datagrid_viber_blast(table.headers):
+        return match_column(table.headers), "SALAD Viber layout detected; Phone matches DataGrid Last Called No. and FullName is checked against Name on the same row"
     chcode = find_header(table.headers, "CHCODE")
     if chcode:
         return chcode, "CHCODE header detected"
@@ -145,7 +147,8 @@ def _detect_file_table(path: Path, sheet: str, database: Table,
     if headered is not None:
         columns = chcode_columns(headered.headers)
         key = columns[0] if columns else match_column(headered.headers)
-        recognized = sum(header.casefold() in known_headers for header in headered.headers)
+        recognized = sum(header.casefold() in known_headers or bool(phone_column([header]))
+                         for header in headered.headers)
         first_key_matches = bool(raw and raw.rows
                                  and normalize(raw.rows[0][1][1], Options()) in database_keys)
         if key:
@@ -159,14 +162,17 @@ def _detect_file_table(path: Path, sheet: str, database: Table,
                 or (headered.headers.index(key) == 1 and key.casefold() == "chcode")))
             if not earlier_data and not first_row_is_data:
                 return headered, True
-        elif recognized >= 2 and not first_key_matches:
-            raise ValueError("The file has headers but no CHCODE, primary_key, or indexone_uid column.")
+        elif (recognized >= 2 or phone_column(headered.headers)) and not first_key_matches:
+            message = "The file has headers but no CHCODE, primary_key, or indexone_uid column."
+            if phone_column(headered.headers):
+                message += " CHCODE is required to compare phone numbers for the same account."
+            raise ValueError(message)
     if raw is not None:
         # A malformed named header must not become data and bypass validation.
         first = next((values for _, values in raw.rows
                       if any(value is not None and str(value).strip() for value in values[1:])), ())
         named = {str(value).strip().casefold() for value in first if value is not None}
-        if len(named & known_headers) >= 2 and not (
+        if sum(name in known_headers or bool(phone_column([name])) for name in named) >= 2 and not (
                 len(first) > 1 and normalize(first[1], Options()) in database_keys):
             raise ValueError(header_error or "The file has headers but no supported CHCODE column.")
         return raw, False
@@ -228,6 +234,9 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                 target, has_headers = candidates[0]
                 column, note = _key_column(target, database_keys) if has_headers else (
                     "CHCODE", "No headers detected; column B is CHCODE and row 1 is included")
+                if (has_headers and phone_column(target.headers) and not is_datagrid_viber_blast(target.headers)
+                        and not find_header(target.headers, "FLOW_STAGE")):
+                    note += "; no FLOW_STAGE detected; phone numbers are compared for the same CHCODE"
                 info = Inspection(names, target.sheet, tuple(target.headers), column,
                                   target.header_row, has_headers)
                 source = UploadedSource(upload, target.sheet, column, has_headers=has_headers)

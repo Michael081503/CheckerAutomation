@@ -1,6 +1,6 @@
 ﻿# CHCODE Database Checker
 
-A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the CHCODE lookup column, compares supported fields, and provides an Excel report download. It supports CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, and files without headers. It is prepared for Streamlit Community Cloud.
+A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the lookup column, compares supported fields, and provides an Excel report download. It supports CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
@@ -34,15 +34,17 @@ Uploaded data is processed on the app server. Each browser session keeps its own
 
 The app selects the supported worksheet and lookup column automatically. Uploaded headers named `CHCODE`, `primary_key`, or `indexone_uid` can contain CHCODE, at any column position; keep the original header names. Recognized DataGrid databases use `Old I.C.` as the database key. It detects each uploaded file separately, so files with the same headers can use different lookup columns when their CHCODE values are stored differently. Recognized field mappings are applied automatically. **Fields checked** and the report show which fields were compared and which remain unchecked.
 
-These header aliases are defined in the shared `checker.py` source and apply to the web app, desktop app, and command-line checker. They work with ordinary header layouts as well as recognized campaign templates. Explicit `CHCODE` takes priority; existing DataGrid layouts retain their usual defaults, and the web app uses database matches to distinguish candidate identifiers.
+These header aliases are defined in the shared `checker.py` source and apply to the web app, desktop app, and command-line checker. They work with ordinary header layouts as well as recognized campaign templates. Explicit `CHCODE` takes priority in CHCODE layouts; recognized SALAD Viber blasts use phone and full name as described below. Existing DataGrid email layouts retain their usual defaults, and the web app uses database matches to distinguish candidate identifiers.
 
-In the automatic app, files with a detected `CHCODE`, `primary_key`, or `indexone_uid` header use their filenames when `FLOW_STAGE` is absent. A present `FLOW_STAGE` must contain one consistent, nonblank identifier. Files without headers use column B as CHCODE, retain the first row as data, and are identified by filename. The database does not need a `FLOW_STAGE` column.
+In the automatic app, files without `FLOW_STAGE` that contain a named phone column compare each number with the database record for the same CHCODE. The detected `CHCODE`, `primary_key`, or `indexone_uid` column remains the lookup key, and other supported fields are also compared. Supported phone headers include `Mobile phone`, `formatted mobile`, `Phone Number`, `Mobile Number`, `Phone`, `Mobile`, and `Contact Number`; case, spaces, and underscores are ignored. A phone file without a CHCODE lookup column, or a database without a supported phone column, produces a file error. Files use their filenames when `FLOW_STAGE` is absent. A present `FLOW_STAGE` must contain one consistent, nonblank identifier. Files without headers use column B as CHCODE, retain the first row as data, and are identified by filename. The database does not need a `FLOW_STAGE` column.
 
 ## HSBC mobile blasts without FLOW_STAGE
 
 Use `HSBC DB as of Oct 23, 2026.xlsx` as the database and add `23-10-26 BLAST Field.xlsx` and `23-10-26 BLAST NEW ENDO.xlsx` as files to check, then click **Check files**. Headers and comparison fields are detected automatically. The database does not need a FLOW_STAGE column.
 
-The recognized mobile-blast layout contains `formatted mobile`, `ChCode`, `ChName`, `LastName`, and `ProductType`. With a database containing the corresponding fields below, both files use their filenames as identifiers when FLOW_STAGE is absent:
+When FLOW_STAGE is absent, the app checks each blast's `formatted mobile` against `Mobile phone` for the same CHCODE. A number belonging to another CHCODE is reported as a difference. Both files use their filenames as identifiers.
+
+The mobile-blast layout compares these mapped fields for each CHCODE:
 
 | File column | Database column | Comparison |
 | --- | --- | --- |
@@ -52,11 +54,30 @@ The recognized mobile-blast layout contains `formatted mobile`, `ChCode`, `ChNam
 | `LastName` | `Last Name` | Text |
 | `ProductType` | `PROD TYPE` | Product |
 
-All five fields are compared for each row. Phone comparison accepts equivalent single Philippine mobile numbers in `+639`, `639`, `09`, and `9` formats, including spaces, hyphens, and parentheses. Different numbers, multiple numbers, and text with extensions are not merged. Product comparison accepts `Credit Card` / `CARDS` and `Personal Loan` / `LOAN`. Last names use text comparison: a database title such as `Mr.` or `Ms.` remains a visible difference.
+Phone comparison accepts equivalent single Philippine mobile numbers in `+639`, `639`, `09`, and `9` formats, including spaces, hyphens, and parentheses. Different numbers, multiple numbers, and text with extensions are not merged. For account-based checks, product comparison accepts `Credit Card` / `CARDS` and `Personal Loan` / `LOAN`. Last names use text comparison: a database title such as `Mr.` or `Ms.` remains a visible difference.
 
-Successful checks show **MAPPED ROWS MATCH**. Blank or unknown CHCODEs and changed fields remain row issues. A present FLOW_STAGE column still needs one consistent, nonblank value. Explicit engine and command-line checks retain their existing FLOW_STAGE requirements, including full-copy comparison.
+Successful checks without a stage show **MAPPED ROWS MATCH**. Wrong or blank phone numbers show **DIFFERENT**, including when the database phone is also blank. Unknown CHCODEs show **NOT FOUND**; blank CHCODEs show **BLANK KEY**. Repeated uploaded rows are checked independently, and duplicate database CHCODEs are compared using their mapped values. The app and Excel report show the expected number from the same account and disclose all field coverage. A present FLOW_STAGE column still needs one consistent, nonblank value. Explicit engine and command-line checks retain their existing FLOW_STAGE requirements, including full-copy comparison; the automatic app enables missing-stage checks with `Options.allow_missing_flow_stage` in uploaded-row mode.
 
 The database and uploaded files can have titles, notes, or blank rows above their column headers. The app detects `CHCODE`, `primary_key`, `indexone_uid`, or the recognized DataGrid header layout, ignoring letter case and outer spaces, and skips the rows above it. The detection summary displays the worksheet, header row, and lookup column. Source row numbers in results and reports retain their original positions.
+
+## SBF SALAD Viber blasts with DataGrid
+
+Add `DataGrid salad.xlsx` as the database and add the `26-10-26 SBF SALAD VIBER BLAST Level_1.csv`, `Level_3.csv`, and `Level_5.csv` files to check. Click **Check files**. The app detects this format automatically without adding FLOW_STAGE or changing the source files.
+
+The recognized layout contains `FullName`, `FirstName`, `LastName`, `Phone`, `CHCode`, `OB`, `Monthly`, `Terms`, `Promo`, and `Level Endo`. In these exports, `CHCode` contains repeated campaign labels rather than DataGrid account identifiers. This layout therefore uses these mappings:
+
+| File column | Database column | Comparison |
+| --- | --- | --- |
+| `Phone` | `Last Called No.` | Phone lookup; equivalent Philippine mobile formats match |
+| `FullName` | `Name` | Text, on the same database row as the phone |
+
+Customer-name comparisons ignore `?` characters in both uploaded and database names. This applies to full names, `Name`, `ChName`, and first, middle, and last names, including mapped fields and full-copy checks. Existing case and space options still apply. Original names are preserved in source rows and Excel reports, and mapping rules disclose the comparison behavior.
+
+Both mapped fields must match one DataGrid row to receive **MATCHED**. A matching phone with a different full name receives **DIFFERENT**, showing the expected name in the app and report. Unknown phones receive **NOT FOUND** and blank phones receive **BLANK KEY**. Shared database phones are resolved by the matching full name, and repeated uploaded rows are checked independently. The report summary includes each file's actual database match column.
+
+`FirstName`, `LastName`, `CHCode`, `OB`, `Monthly`, `Terms`, `Promo`, and `Level Endo` remain **NOT CHECKED**. The campaign amounts are not treated as DataGrid's balance, monthly instalment, or paid term. A passing result covers phone and full name only. Other CHCODE layouts continue comparing phones for the same CHCODE, including in a batch containing both layouts. Recognized SALAD Viber pairs can omit FLOW_STAGE in uploaded-row checks, including the command line; a present stage and full-copy checks retain their usual validation.
+
+The report for the supplied files is `reports/SBF_SALAD_VIBER_check_2026-10-26.xlsx`.
 
 ## DataGrid email blasts
 

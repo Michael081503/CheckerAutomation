@@ -48,7 +48,7 @@ def main():
     export_report(arguments.output, database, options, results)
     for result in results:
         print(json.dumps({"file": result.source.path.name, "identifier": result.file_identifier,
-                          "file_key": result.source.column, "database_key": database.column,
+                          "file_key": result.source.column, "database_key": result.database_match_column or database.column,
                           "FLOW_STAGE": result.flow_stage, "rows": len(result.records),
                           "matched": result.count("MATCHED"), "changed": result.count("DIFFERENT"),
                           "not_found": result.count("NOT FOUND"), "blank_key": result.count("BLANK KEY"),

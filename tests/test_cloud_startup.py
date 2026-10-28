@@ -49,11 +49,15 @@ class CloudStartupTests(unittest.TestCase):
             if sys.argv[1] == "previous-endorsement":
                 checker.COMPARISON_VERSION = 1
                 del checker.is_salad_endo_pair
+            if sys.argv[1] == "previous-regular":
+                checker.COMPARISON_VERSION = 2
             web_checker.AUTO_DETECTION_VERSION = 7
             if sys.argv[1] == "previous-comparison":
                 web_checker.AUTO_DETECTION_VERSION = 8
             if sys.argv[1] == "previous-endorsement":
                 web_checker.AUTO_DETECTION_VERSION = 9
+            if sys.argv[1] == "previous-regular":
+                web_checker.AUTO_DETECTION_VERSION = 10
             web_checker._key_column = outdated_detector
 
             with patch("streamlit.file_uploader", side_effect=uploader):
@@ -65,7 +69,8 @@ class CloudStartupTests(unittest.TestCase):
                 run = app.session_state["check_run"]
                 assert run.results[0].database_match_column == "Debtor ID"
                 assert run.results[0].count("MATCHED") == 1
-                assert web_checker.AUTO_DETECTION_VERSION == 10
+                assert web_checker.AUTO_DETECTION_VERSION == 11
+                assert checker.COMPARISON_VERSION == 3
                 assert callable(checker.is_salad_endo_pair)
 
                 # Healthy modules and the completed result survive normal reruns.
@@ -77,7 +82,7 @@ class CloudStartupTests(unittest.TestCase):
                 assert web_checker.prepare_uploaded_check is detect
                 assert app.session_state["check_run"] is run
         """)
-        for cached in ("engine-and-adapter", "adapter-only", "previous-comparison", "previous-endorsement"):
+        for cached in ("engine-and-adapter", "adapter-only", "previous-comparison", "previous-endorsement", "previous-regular"):
             with self.subTest(cached=cached):
                 result = subprocess.run(
                     [sys.executable, "-c", script, cached], cwd=root,

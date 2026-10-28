@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 from test_sbf_pl_viber import BLAST_HEADERS as PL_HEADERS, pl_database, pl_row
-from test_salad_endo import endo_blast, endo_database
+from test_salad_endo import endo_blast, endo_database, regular_database
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
 from test_web_checker import cbs_apd_uploads, cbs_pl_uploads, csv_upload, database_upload, datagrid_upload, email_blast_upload, hsbc_mobile_uploads, xlsx_upload
@@ -343,6 +343,20 @@ class StreamlitAppTests(unittest.TestCase):
         coverage = next(frame.value for frame in self.app.dataframe if "Coverage" in frame.value.columns)
         self.assertEqual(list(coverage["Coverage"]).count("CHECKED"), 3)
         self.assertEqual(len(self.app.get("download_button")), 1)
+
+    def test_regular_pl_endorsement_is_detected_and_checked_in_the_web_app(self):
+        self.database = BrowserFile(regular_database())
+        upload = endo_blast()
+        self.files = [BrowserFile(type(upload)("SBF PL EMAIL BLAST NEW ENDO.csv", upload.data))]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual(result.count("MATCHED"), 2)
+        self.assertEqual(result.source.column, "accountnumber")
+        self.assertEqual(result.database_match_column, "caseAccountNo")
+        self.assertEqual(self.detection_rows().iloc[0]["Check"], "Account number, name and email")
+        self.assertTrue(any("SBF endorsement record (SALAD / PL)" in caption.value for caption in self.app.caption))
+        self.assertIn("agentcode", result.ignored_columns)
 
     def test_headerless_file_preserves_row_one_and_checks_column_b(self):
         self.files = [BrowserFile(csv_upload("no_headers.csv", [

@@ -240,7 +240,7 @@ class CheckerApp(tk.Tk):
         column = match_column(table.headers, database_headers)
         return {"path": Path(path), "sheet": table.sheet, "sheets": names,
                 "column": column, "headers": table.headers, "header_row": table.header_row,
-                "rows": len(table.rows), "error": "" if column else "Missing CHCODE header or supported DataGrid / SALAD endorsement layout"}
+                "rows": len(table.rows), "error": "" if column else "Missing CHCODE header or supported DataGrid / SBF endorsement layout"}
 
     def _set_database(self, data):
         previous_headers = self.database['headers'] if self.database else None
@@ -258,7 +258,7 @@ class CheckerApp(tk.Tk):
         self._invalidate()
         self.status.set(data['error'] or f"Database ready: {data['column']} header found on row {data['header_row']}; {data['rows']:,} data rows. Add files to check.")
         if data['error']:
-            messagebox.showwarning("Match header required", "Choose a worksheet with CHCODE, a supported DataGrid export, or SALAD endorsement columns including caseAccountNo, caseNo, caseCustomerName, caseCustomerEmail, and Collector. Headers below the first row are detected automatically.", parent=self)
+            messagebox.showwarning("Match header required", "Choose a worksheet with CHCODE, a supported DataGrid export, or SBF SALAD / PL endorsement columns including caseAccountNo, caseNo, caseCustomerName, caseCustomerEmail, and Collector. Headers below the first row are detected automatically.", parent=self)
 
     def _choose_database(self):
         path = filedialog.askopenfilename(title="Choose the database", filetypes=FILE_TYPES, parent=self)

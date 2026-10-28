@@ -32,6 +32,16 @@ def endo_row(account="0012345", name="Ana Peña", email="ana@example.test"):
     return [email, "", "", "", "", account, name, "CAMPAIGN-AGENT"]
 
 
+def regular_database():
+    # Regular PL exports add columns and shift the account / customer positions.
+    return xlsx_upload("REGULAR - 10282026.xlsx", [
+        ["Collector", "Level_Today", "caseNo", "caseAccountNo", "caseBaseAccountNo",
+         "caseCustomerName", "caseCustomerEmail", "PRODUCT_TYPE"],
+        ["STAFF-A", "Level_1", "case-A", "0012345", "base-A", "Ana Peña", "ana@example.test", "PL"],
+        ["STAFF-B", "Level_3", "case-B", "0098765", "base-B", "Bob Jones", "bob@example.test", "PL"],
+    ])
+
+
 def endo_blast(rows=None, headers=None):
     return csv_upload("SBF SALAD EMAIL BLAST NEW ENDO.csv", [headers or BLAST_HEADERS, *(rows if rows is not None else [
         endo_row(), endo_row("0098765", "Bob Jones", "bob@example.test"),
@@ -59,6 +69,21 @@ class SaladEndorsementTests(unittest.TestCase):
                                           ColumnMapping("chname", "caseCustomerName")])
         self.assertEqual(result.ignored_columns, ["cc", "bcc", "indexone_uid", "primary_key", "agentcode"])
         self.assertEqual(result.missing_rows, [])  # Unused endorsement records are allowed.
+
+    def test_regular_pl_export_uses_the_same_fields_despite_extra_columns_and_different_filenames(self):
+        base = endo_blast()
+        upload = type(base)("28-10-26 SBF PL EMAIL BLAST NEW ENDO.csv", base.data)
+        prepared = prepare_uploaded_check(regular_database(), [upload])
+        self.assertEqual(prepared.database_error, "")
+        self.assertEqual(prepared.files[0].error, "")
+        self.assertEqual(prepared.files[0].source.column, "accountnumber")
+        self.assertIn("SALAD / PL", prepared.files[0].note)
+        result = run_prepared_check(prepared).results[0]
+        self.assertEqual(result.verdict, "MAPPED ROWS MATCH")
+        self.assertEqual([row[:3] for row in result.records], [(2, "MATCHED", "2"), (3, "MATCHED", "3")])
+        self.assertEqual(len(result.mappings), 3)
+        self.assertIn("agentcode", result.ignored_columns)
+        self.assertEqual(result.database_match_column, "caseAccountNo")
 
     def test_unknown_blank_and_wrong_accounts_and_real_field_differences_fail(self):
         result = self.run_blast([

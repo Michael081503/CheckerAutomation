@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 2
+COMPARISON_VERSION = 3
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -156,7 +156,7 @@ def is_datagrid_database(headers: Iterable) -> bool:
 
 
 def is_salad_endo_database(headers: Iterable) -> bool:
-    """Recognize a SALAD endorsement workbook by its source-system columns."""
+    """Recognize SBF SALAD and regular PL endorsement source columns."""
     return {"caseno", "caseaccountno", "casecustomername", "casecustomeremail", "collector"}.issubset(
         _header_names(headers))
 
@@ -716,7 +716,7 @@ def check_files(database: Source, files: list[Source], options: Options,
             if (options.mapped_fields and source.has_headers and is_salad_endo_database(table.headers)
                     and not _has_chcode(table.headers) and not _has_chcode(target.headers)
                     and not is_salad_endo_pair(target.headers, table.headers, source.column, database.column)):
-                raise ValueError("SALAD endorsement email checks require accountnumber, chname, and email, using accountnumber to match caseAccountNo.")
+                raise ValueError("SBF endorsement email checks require accountnumber, chname, and email, using accountnumber to match caseAccountNo.")
             if (options.mapped_fields and is_datagrid_pl_viber_blast(target.headers)
                     and source.column.casefold() == "debtorid"):
                 if not is_datagrid_pl_viber_pair(target.headers, table.headers, source.column, database.column):

@@ -13,14 +13,14 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 2)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 3)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 10:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 11:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
@@ -151,7 +151,7 @@ def render_file_details(result, run, index):
                 st.caption("Question marks are ignored when comparing customer names. Original names are kept in the report.")
                 st.caption("The replacement character (�) matches Ñ/ñ at the same position in a customer name; other letters must match.")
             if is_salad_endo_pair(result.headers, result.database_headers, result.source.column, result.database_match_column):
-                st.caption("Account number, customer name and email are checked on the same SALAD endorsement record. Agentcode and Collector staff assignments are not compared.")
+                st.caption("Account number, customer name and email are checked on the same SBF endorsement record (SALAD / PL). Agentcode and Collector staff assignments are not compared.")
             elif is_datagrid_pl_viber_blast(result.headers) and result.source.column.casefold() == "debtorid":
                 st.caption("Debtorid is matched to DataGrid Debtor ID; FullName and Phone must match Name and Last Called No. on the same database row. Staff and campaign fields are not checked.")
             elif is_datagrid_viber_blast(result.headers) and result.source.column.casefold() == "phone":
@@ -277,7 +277,7 @@ def main():
     st.caption("Files without FLOW_STAGE use CHCODE to compare phone numbers with the matching database record.")
     st.caption("SALAD Viber blasts use Phone and FullName to check the same DataGrid row.")
     st.caption("PL Viber blasts use Debtorid to check FullName and Phone against the same DataGrid record.")
-    st.caption("SALAD endorsement email blasts use accountnumber to check the name and email against caseAccountNo in the endorsement workbook.")
+    st.caption("SALAD and PL NEW ENDO email blasts use accountnumber to check the name and email against caseAccountNo in the endorsement workbook.")
     st.caption("Uploads are processed in this session. Start over clears the current uploads and results.")
 
     options = Options(ignore_case=True, trim_spaces=True, mapped_fields=True,

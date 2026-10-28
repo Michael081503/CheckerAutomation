@@ -18,7 +18,7 @@ from checker import (
     find_header, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, match_column, normalize, phone_column, read_table, sheet_names,
 )
 
-AUTO_DETECTION_VERSION = 10
+AUTO_DETECTION_VERSION = 11
 
 
 @dataclass(frozen=True)
@@ -102,10 +102,10 @@ def inspect_upload(upload: Upload, sheet: str | None = None, *, has_headers: boo
 def _key_column(table: Table, database_keys: set[str], database_headers=()) -> tuple[str, str]:
     """Choose one lookup for the entire file; unmatched rows never switch keys."""
     if is_salad_endo_pair(table.headers, database_headers):
-        return match_column(table.headers, database_headers), "SALAD endorsement layout detected; accountnumber matches caseAccountNo; email and chname are checked on the same account. Staff assignments are not checked"
+        return match_column(table.headers, database_headers), "SBF endorsement layout detected (SALAD / PL); accountnumber matches caseAccountNo; email and chname are checked on the same account. Staff assignments are not checked"
     if (is_salad_endo_database(database_headers) and not find_header(database_headers, "CHCODE")
             and not find_header(table.headers, "CHCODE")):
-        raise ValueError("SALAD endorsement email files require accountnumber, chname, and email columns.")
+        raise ValueError("SBF endorsement email files require accountnumber, chname, and email columns.")
     if is_datagrid_pl_viber_blast(table.headers):
         return match_column(table.headers), "PL Viber layout detected; Debtorid matches DataGrid Debtor ID; FullName and Phone are checked against Name and Last Called No. on the same row"
     if is_datagrid_viber_blast(table.headers):
@@ -204,7 +204,7 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                     database_errors.append(str(error))
             if not candidates:
                 raise ValueError(database_errors[0] if database_errors else
-                                 "The database must have a CHCODE header (CHCODE, primary_key, or indexone_uid), supported DataGrid headers, or the SALAD endorsement columns: caseNo, caseAccountNo, caseCustomerName, caseCustomerEmail, and Collector.")
+                                 "The database must have a CHCODE header (CHCODE, primary_key, or indexone_uid), supported DataGrid headers, or the SBF SALAD / PL endorsement columns: caseNo, caseAccountNo, caseCustomerName, caseCustomerEmail, and Collector.")
             if len(candidates) > 1:
                 raise ValueError("Multiple database worksheets have supported headers. Upload a workbook with one database worksheet.")
             table, database_column = candidates[0]

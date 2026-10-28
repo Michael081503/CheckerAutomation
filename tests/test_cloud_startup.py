@@ -1,5 +1,6 @@
 """Exercise in-process Cloud updates in an isolated Python interpreter."""
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -29,8 +30,10 @@ class CloudStartupTests(unittest.TestCase):
                     super().__init__(upload.data)
                     self.name = upload.name
 
-            database = BrowserFile(pl_database())
-            files = [BrowserFile(csv_upload("viber.csv", [BLAST_HEADERS, pl_row()]))]
+            database = BrowserFile(pl_database([
+                ["Ana Peña", "00123", "000001", "a@example.test", "09171234567", 1001],
+            ]))
+            files = [BrowserFile(csv_upload("viber.csv", [BLAST_HEADERS, pl_row(name="Ana Pe\ufffda")]))]
 
             def uploader(label, *args, **kwargs):
                 return database if kwargs.get("key", "").startswith("database_upload_") else files
@@ -41,7 +44,11 @@ class CloudStartupTests(unittest.TestCase):
             # Streamlit can retain imported modules while rerunning a new entrypoint.
             if sys.argv[1] == "engine-and-adapter":
                 del checker.is_datagrid_pl_viber_blast
+            if sys.argv[1] == "previous-comparison":
+                checker.COMPARISON_VERSION = 0
             web_checker.AUTO_DETECTION_VERSION = 7
+            if sys.argv[1] == "previous-comparison":
+                web_checker.AUTO_DETECTION_VERSION = 8
             web_checker._key_column = outdated_detector
 
             with patch("streamlit.file_uploader", side_effect=uploader):
@@ -53,7 +60,7 @@ class CloudStartupTests(unittest.TestCase):
                 run = app.session_state["check_run"]
                 assert run.results[0].database_match_column == "Debtor ID"
                 assert run.results[0].count("MATCHED") == 1
-                assert web_checker.AUTO_DETECTION_VERSION == 8
+                assert web_checker.AUTO_DETECTION_VERSION == 9
 
                 # Healthy modules and the completed result survive normal reruns.
                 options_type = checker.Options
@@ -64,11 +71,12 @@ class CloudStartupTests(unittest.TestCase):
                 assert web_checker.prepare_uploaded_check is detect
                 assert app.session_state["check_run"] is run
         """)
-        for cached in ("engine-and-adapter", "adapter-only"):
+        for cached in ("engine-and-adapter", "adapter-only", "previous-comparison"):
             with self.subTest(cached=cached):
                 result = subprocess.run(
                     [sys.executable, "-c", script, cached], cwd=root,
                     capture_output=True, text=True, timeout=60,
+                    env={**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"},
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

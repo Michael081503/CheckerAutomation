@@ -15,6 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
+COMPARISON_VERSION = 1
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -479,6 +480,29 @@ def compare_value(value, comparison: str, options: Options, *, customer_name: bo
     return normalize(value, options)
 
 
+def _name_text_matches(actual: str, expected: str) -> bool:
+    """Compare normalized names, allowing a lost enye only at the same position.
+
+    U+FFFD is already present in some exports, so decoding cannot recover its
+    original letter. Never treat it as a wildcard for any other character.
+    """
+    if actual == expected:
+        return True
+    return len(actual) == len(expected) and all(
+        left == right
+        or (left == "\ufffd" and right in "\u00d1\u00f1")
+        or (right == "\ufffd" and left in "\u00d1\u00f1")
+        for left, right in zip(actual, expected)
+    )
+
+
+def _signature_difference_count(actual: tuple, expected: tuple, name_positions: set[int]) -> int:
+    return sum(
+        not (_name_text_matches(left, right) if index in name_positions else left == right)
+        for index, (left, right) in enumerate(zip(actual, expected))
+    )
+
+
 def find_header(headers: Iterable[str], name: str) -> str:
     return next((header for header in headers if header.casefold() == name.strip().casefold()), "")
 
@@ -536,6 +560,9 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
     positions = [(target.headers.index(item.file_column), table.headers.index(item.database_column), item) for item in mappings]
     customer_name_fields = {item.file_column for item in mappings
                             if is_customer_name_column(item.file_column) or is_customer_name_column(item.database_column)}
+    name_positions = {index for index, (_, _, item) in enumerate(positions)
+                      if item.comparison == "Text" and item.file_column in customer_name_fields
+                      and item.file_column != source.column}
     database_rows = dict(table.rows)
     # An uploaded row is validated independently; database rows may be reused by
     # repeated uploaded CHCODEs and by separate campaign files.
@@ -568,6 +595,10 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
                           for file_pos, _, item in positions)
         matched = exact.get((key, signature))
         blank_phone = phone_position is not None and not normalize(values[phone_position], options)
+        if matched is None and not blank_phone and key in lookup:
+            # Only compare names within the same identifier's database rows.
+            matched = next((number for number in lookup[key] if not _signature_difference_count(
+                signature, database_signatures[number], name_positions)), None)
         if blank_phone:
             matched = None
         if not key:
@@ -579,13 +610,16 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
         else:
             status = "DIFFERENT"
             # Show the candidate with the fewest differing mapped values.
-            matched = min(lookup[key], key=lambda number: sum(a != b for a, b in zip(signature, database_signatures[number])))
+            matched = min(lookup[key], key=lambda number: _signature_difference_count(
+                signature, database_signatures[number], name_positions))
             expected = database_rows[matched]
             for file_pos, db_pos, item in positions:
                 actual, wanted = values[file_pos], expected[db_pos]
                 name_field = item.file_column in customer_name_fields
-                if (compare_value(actual, item.comparison, options, customer_name=name_field)
-                        != compare_value(wanted, item.comparison, options, customer_name=name_field)):
+                actual_text = compare_value(actual, item.comparison, options, customer_name=name_field)
+                wanted_text = compare_value(wanted, item.comparison, options, customer_name=name_field)
+                name_match = (item.comparison == "Text" and name_field and item.file_column != source.column)
+                if not (_name_text_matches(actual_text, wanted_text) if name_match else actual_text == wanted_text):
                     label = item.file_column if item.file_column == item.database_column else f"{item.file_column} → {item.database_column}"
                     result.differences.append((row_number, matched, label, actual, wanted))
                 elif blank_phone and item.file_column == required_phone:
@@ -729,6 +763,26 @@ def check_files(database: Source, files: list[Source], options: Options,
                         matched = candidates.popleft()
                         exact[number] = matched
                         consumed.add(matched)
+                # Reserve compatible damaged-name rows after exact rows, before
+                # pairing changed rows. Duplicate accounts still consume one row.
+                name_positions = {index for index, name in enumerate(comparison_headers)
+                                  if name in customer_name_columns and name != database.column}
+                for number, values in target.rows:
+                    if cancelled():
+                        raise Cancelled()
+                    if number in exact:
+                        continue
+                    key = compare_value(values[target_position], "Text", options,
+                                        customer_name=database.column in customer_name_columns)
+                    signature = tuple(compare_value(values[target_columns[name.casefold()]], "Text", options,
+                                                      customer_name=name in customer_name_columns)
+                                      for name in comparison_headers)
+                    matched = next((candidate for candidate in lookup.get(key, [])
+                                    if candidate not in consumed and not _signature_difference_count(
+                                        signature, signatures[candidate], name_positions)), None)
+                    if matched is not None:
+                        exact[number] = matched
+                        consumed.add(matched)
             remaining = {key: deque(number for number in numbers if number not in consumed)
                          for key, numbers in lookup.items()}
             for row_number, values in target.rows:
@@ -756,8 +810,10 @@ def check_files(database: Source, files: list[Source], options: Options,
                         else:
                             actual = values[target_columns[name_key]]
                             name_field = name in customer_name_columns
-                            if (compare_value(actual, "Text", options, customer_name=name_field)
-                                    != compare_value(expected_value, "Text", options, customer_name=name_field)):
+                            actual_text = compare_value(actual, "Text", options, customer_name=name_field)
+                            wanted_text = compare_value(expected_value, "Text", options, customer_name=name_field)
+                            name_match = name_field and name != database.column
+                            if not (_name_text_matches(actual_text, wanted_text) if name_match else actual_text == wanted_text):
                                 result.differences.append((row_number, matched, name, actual, expected_value))
                     for name in result.extra_columns:
                         result.differences.append((row_number, matched, name, values[target_columns[name.casefold()]], "(no database column)"))
@@ -853,6 +909,7 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                     if item.comparison == "Text" and (is_customer_name_column(item.file_column)
                                                       or is_customer_name_column(item.database_column)):
                         rule += "; question marks are ignored in customer names"
+                        rule += "; replacement character U+FFFD matches only a corresponding Ñ/ñ; other letters must match"
                     append(mapping_sheet, [header, item.database_column, item.comparison, "CHECKED", rule])
         else:
             missing = book.create_sheet(f"Missing {index:03d}")

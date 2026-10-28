@@ -12,14 +12,15 @@ import checker as _checker
 # Refresh the engine before importing new symbols, then refresh its dependent
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
-_engine_refreshed = not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
+_engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 1)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 8:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 9:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
@@ -148,6 +149,7 @@ def render_file_details(result, run, index):
             if any(is_customer_name_column(item.file_column) or is_customer_name_column(item.database_column)
                    for item in result.mappings):
                 st.caption("Question marks are ignored when comparing customer names. Original names are kept in the report.")
+                st.caption("The replacement character (�) matches Ñ/ñ at the same position in a customer name; other letters must match.")
             if is_datagrid_pl_viber_blast(result.headers) and result.source.column.casefold() == "debtorid":
                 st.caption("Debtorid is matched to DataGrid Debtor ID; FullName and Phone must match Name and Last Called No. on the same database row. Staff and campaign fields are not checked.")
             elif is_datagrid_viber_blast(result.headers) and result.source.column.casefold() == "phone":
@@ -232,7 +234,7 @@ def main():
     elif prepared and prepared.database_info:
         info = prepared.database_info
         worksheet = f"{info.sheet}, " if info.sheet else ""
-        st.caption(f"Database: {database_upload.name} - {worksheet}{info.column} header found on row {info.header_row}.")
+        st.caption(f"Database: {database_upload.name} - {worksheet}{info.column} header found on row {info.header_row}. Header rows are excluded from account checks.")
 
     if prepared and prepared.files:
         summary = []

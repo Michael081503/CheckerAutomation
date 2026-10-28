@@ -35,7 +35,7 @@ These repository, entrypoint, and Python-version settings follow Streamlit's [of
 
 ## Recover after a source update
 
-The entrypoint refreshes an older in-memory checker and upload adapter before importing Debtor ID support. This handles a Cloud process that reruns the updated app while retaining modules from the previous release. Normal reruns preserve the loaded modules and current results.
+The entrypoint refreshes an older in-memory checker and upload adapter before using the current comparison rules. This handles a Cloud process that reruns the updated app while retaining modules from the previous release. Normal reruns preserve the loaded modules and current results. A comparison-version check also refreshes releases that already supported Debtor ID but used older customer-name rules.
 
 If Cloud still reports `cannot import name 'is_datagrid_pl_viber_blast'`, verify the app uses this repository's `main` branch and `streamlit_app.py`, then select **Manage app → ⋮ → Reboot app** and confirm **Reboot**. This clears the process memory and reloads the repository source. See Streamlit's [reboot instructions](https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app/reboot-your-app).
 
@@ -60,6 +60,8 @@ For the HSBC mobile blasts, add `HSBC DB as of Oct 23, 2026.xlsx` as the databas
 For the SBF SALAD Viber blasts, add `DataGrid salad.xlsx` as the database and the Level 1, 3, and 5 CSVs as files to check. The app recognizes their full ten-column layout and matches `Phone` with `Last Called No.`, then checks `FullName` against `Name` on the same DataGrid row. Both fields must match to pass. The report lists unknown phones, blank phones, and changed names, along with the actual database lookup column. Other campaign fields, including `CHCode` and campaign amounts, remain **NOT CHECKED**. This format can omit FLOW_STAGE; other CHCODE layouts retain their account-based checks.
 
 Question marks are ignored when comparing customer names in both uploaded and database rows. Original names remain in source rows and reports, and genuine name differences still require review.
+
+In customer names, the replacement character `�` matches a corresponding `Ñ` or `ñ` at the same position on the same account. Every other character and mapped field must agree. It is not a wildcard for other letters, IDs, emails, or notes. Files with headers exclude the header row and preamble from account checks and totals; files without headers retain their first data row.
 
 Replacing an uploaded database or file clears old results. Run the check again after changes. Files with errors are reported while other files continue. A database error must be corrected before a check can run.
 

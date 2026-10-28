@@ -18,7 +18,7 @@ from checker import (
     find_header, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, match_column, normalize, phone_column, read_table, sheet_names,
 )
 
-AUTO_DETECTION_VERSION = 8
+AUTO_DETECTION_VERSION = 9
 
 
 @dataclass(frozen=True)

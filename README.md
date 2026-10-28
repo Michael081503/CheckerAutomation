@@ -98,6 +98,8 @@ The existing command-line checker detects this pair too:
 .\.venv\Scripts\python.exe scripts\check_files.py --database "..\AUTOCHECKER\DataGrid(1).xlsx" --files "..\AUTOCHECKER\27-10-26 SBF PL VIBER BLAST Level_1.csv" "..\AUTOCHECKER\27-10-26 SBF PL VIBER BLAST Level_3.csv" "..\AUTOCHECKER\27-10-26 SBF PL VIBER BLAST Level_5.csv" --output "reports\SBF_PL_VIBER_check.xlsx"
 ```
 
+The five `28-10-26 SBF VIBER BLAST` CSVs use the same layout with `DataGrid(3).xlsx`. Their header rows are excluded from the 16,447 account rows checked. All Debtor IDs are present and unique across the batch. With the damaged-Ñ name rule described below, 16,372 rows match and 75 rows have phone differences; the 64 names containing a replacement character now match their account's DataGrid name. The rechecked report is `reports/SBF_VIBER_DebtorID_recheck_2026-10-28.xlsx`.
+
 ## SBF SALAD Viber blasts with DataGrid
 
 Add `DataGrid salad.xlsx` as the database and add the `26-10-26 SBF SALAD VIBER BLAST Level_1.csv`, `Level_3.csv`, and `Level_5.csv` files to check. Click **Check files**. The app detects this format automatically without adding FLOW_STAGE or changing the source files.
@@ -110,6 +112,8 @@ The recognized layout contains `FullName`, `FirstName`, `LastName`, `Phone`, `CH
 | `FullName` | `Name` | Text, on the same database row as the phone |
 
 Customer-name comparisons ignore `?` characters in both uploaded and database names. This applies to full names, `Name`, `ChName`, and first, middle, and last names, including mapped fields and full-copy checks. Existing case and space options still apply. Original names are preserved in source rows and Excel reports, and mapping rules disclose the comparison behavior.
+
+Some exports already contain the Unicode replacement character `�` (U+FFFD) where a name had `Ñ` or `ñ`. On the same account record, `Pe�a` therefore matches `Peña` when every other character and mapped field agrees. This rule applies only to customer names: `�` does not match other letters or disappear from IDs, email addresses, or notes. Original values remain visible in the report. Ordinary `Pena` and `Peña` still differ.
 
 Both mapped fields must match one DataGrid row to receive **MATCHED**. A matching phone with a different full name receives **DIFFERENT**, showing the expected name in the app and report. Unknown phones receive **NOT FOUND** and blank phones receive **BLANK KEY**. Shared database phones are resolved by the matching full name, and repeated uploaded rows are checked independently. The report summary includes each file's actual database match column.
 
@@ -152,6 +156,8 @@ The supplied CBS PL CSV was checked against its refreshed `DataGrid.xlsx` (474 d
 ## Headerless files and row results
 
 Files without column headers are detected automatically. The app reads column B as CHCODE and includes the first row as data. Only CHCODE values are checked; other columns appear as `Column A`, `Column C`, and so on, and stay **NOT CHECKED** because their meaning cannot be established from a position alone. Headerless files are identified by filename and do not need a FLOW_STAGE column. Successful checks show **MAPPED ROWS MATCH**, covering CHCODE only. The database still needs its original column headers, including its lookup key.
+
+For files with headers, the detected header row and any preamble are excluded from account checks and row totals. Data starts after the header; original source row numbers are retained in results.
 
 Uploaded-row results (the key is CHCODE for campaign files and the detected identifier for DataGrid blasts):
 

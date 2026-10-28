@@ -316,6 +316,18 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(result.differences, [])
         self.assertTrue(any("Question marks are ignored" in caption.value for caption in self.app.caption))
 
+    def test_replacement_glyph_names_match_and_header_rows_are_excluded(self):
+        self.database = BrowserFile(pl_database([
+            ["Ana Peña", "00123", "000001", "a@example.test", "09171234567", 1001],
+        ]))
+        self.files = [BrowserFile(csv_upload("viber.csv", [PL_HEADERS, pl_row(name="Ana Pe\ufffda")]))]
+        self.run_check()
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual([row[:3] for row in result.records], [(2, "MATCHED", "2")])
+        self.assertEqual(result.differences, [])
+        self.assertTrue(any("Header rows are excluded" in caption.value for caption in self.app.caption))
+        self.assertTrue(any("replacement character" in caption.value for caption in self.app.caption))
+
     def test_headerless_file_preserves_row_one_and_checks_column_b(self):
         self.files = [BrowserFile(csv_upload("no_headers.csv", [
             ["First row", "00123", "Unmapped value"],

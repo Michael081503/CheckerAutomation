@@ -268,6 +268,25 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(list(issue_rows["Issue"]), ["NOT FOUND", "BLANK KEY"])
         self.assertEqual(len(self.app.get("download_button")), 1)
 
+    def test_hsbc_last_name_title_is_ignored_while_real_surname_differences_remain(self):
+        self.database = BrowserFile(xlsx_upload("HSBC.xlsx", [
+            ["CHCODE", "Mobile phone", "Name", "Last Name", "PROD TYPE"],
+            ["00123", "09171234567", "Alice Smith", "Mr./Ms. Smith", "CARDS"],
+        ]))
+        self.files = [BrowserFile(csv_upload("HSBC SMS.csv", [
+            ["formatted mobile", "ChCode", "ChName", "LastName", "ProductType"],
+            ["09171234567", "00123", "Alice Smith", "Smith", "Credit Card"],
+            ["09171234567", "00123", "Alice Smith", "Jones", "Credit Card"],
+        ]))]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual((result.count("MATCHED"), result.count("DIFFERENT")), (1, 1))
+        self.assertEqual(result.differences[0][2:], ("LastName → Last Name", "Jones", "Mr./Ms. Smith"))
+        self.assertTrue(any("Leading Mr./Ms." in caption.value for caption in self.app.caption))
+        coverage = next(frame.value for frame in self.app.dataframe if "Coverage" in frame.value.columns)
+        self.assertEqual(list(coverage["Coverage"]).count("CHECKED"), 5)
+
     def test_salad_viber_blasts_automatically_check_phone_and_name_with_datagrid(self):
         database, blasts = salad_viber_uploads(changed_name=True)
         self.database = BrowserFile(database)

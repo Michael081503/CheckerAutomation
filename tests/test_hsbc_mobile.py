@@ -87,6 +87,89 @@ class HSBCMobileTests(unittest.TestCase):
         self.assertEqual([result.records[0][2] for result in results], ["2", "2"])
         self.assertEqual(results[1].file_identifier, "BLAST NEW ENDO.xlsx")
 
+    def test_leading_titles_are_ignored_on_either_side_but_surnames_and_suffixes_are_checked(self):
+        for actual, expected in [
+            ("Smith", "Mr./Ms. Smith"), ("Smith", "mR. / mS. Smith"),
+            ("Smith", "Mr. Smith"), ("Smith", "Ms. Smith"),
+            ("Mr./Ms. Smith", "Smith"), (" Smith ", " Mr./Ms. Smith "),
+            ("Lim Jr", "Mr./Ms. Lim Jr"),
+        ]:
+            with self.subTest(actual=actual, expected=expected):
+                database = self.database(rows=[["00123", "09171234567", "Alice Smith", expected, "CARDS"]])
+                row = [*self.alice[:3], actual, self.alice[4]]
+                result = check_files(database, [self.campaign([row])], self.options)[0]
+                self.assertEqual(result.verdict, "MAPPED ROWS MATCH")
+                self.assertEqual(result.differences, [])
+        for actual, expected in [
+            ("Jones", "Mr./Ms. Smith"), ("Lim", "Mr./Ms. Lim Jr"),
+            ("Smith", "Mr./Ms.Smith"), ("Smith", "The Mr./Ms. Smith"),
+            ("", "Mr./Ms."), ("Smith", "Dr. Smith"),
+        ]:
+            with self.subTest(actual=actual, expected=expected):
+                database = self.database(rows=[["00123", "09171234567", "Alice Smith", expected, "CARDS"]])
+                result = check_files(database, [self.campaign([[*self.alice[:3], actual, self.alice[4]]])], self.options)[0]
+                self.assertEqual(result.count("DIFFERENT"), 1)
+                self.assertEqual(len(result.differences), 1)
+                self.assertEqual(result.differences[0][2], "LastName → Last Name")
+        database = self.database(rows=[["00123", "09171234567", "Alice Smith", "Mr./Ms. Smith", "CARDS"]])
+        result = check_files(database, [self.campaign([[*self.alice[:3], "smith", self.alice[4]]])],
+                             replace(self.options, ignore_case=False))[0]
+        self.assertEqual(result.count("DIFFERENT"), 1)
+
+    def test_ignoring_titles_never_skips_other_mapped_fields_or_changes_keys(self):
+        database = self.database(rows=[["00123", "09171234567", "Alice Smith", "Mr./Ms. Smith", "CARDS"]])
+        rows = [self.alice,
+                ["09171234567", "00123", "Mr./Ms. Alice Smith", "Smith", "Credit Card"],
+                ["09181234567", "00123", "Alice Smith", "Smith", "Credit Card"],
+                ["09171234567", "00123", "Alice Smith", "Smith", "Personal Loan"],
+                ["09171234567", "Mr./Ms. 00123", "Alice Smith", "Smith", "Credit Card"]]
+        result = check_files(database, [self.campaign(rows)], self.options)[0]
+        self.assertEqual([row[1] for row in result.records], ["MATCHED", "DIFFERENT", "DIFFERENT", "DIFFERENT", "NOT FOUND"])
+        self.assertEqual({row[2] for row in result.differences},
+                         {"ChName → Name", "formatted mobile → Mobile phone", "ProductType → PROD TYPE"})
+
+    def test_titles_in_other_layouts_and_full_copy_are_still_compared(self):
+        database = self.database(["CHCODE", "Last Name"], [["00123", "Mr./Ms. Smith"]])
+        source = self.campaign([["00123", "Smith"]], ["CHCODE", "LastName"])
+        result = check_files(database, [source], Options(mapped_fields=True))[0]
+        self.assertEqual(result.count("DIFFERENT"), 1)
+        source = self.campaign([["00123", "Smith"]], ["CHCODE", "Last Name"])
+        result = check_files(database, [source], Options())[0]
+        self.assertEqual(result.count("DIFFERENT"), 1)
+
+    def test_duplicate_chcodes_match_every_field_on_one_row_after_ignoring_titles(self):
+        database = self.database(rows=[
+            ["00123", "09171234567", "Alice Smith", "Mr./Ms. Smith", "CARDS"],
+            ["00123", "09189876543", "Bob Jones", "Mr./Ms. Jones", "LOAN"],
+        ])
+        source = self.campaign([
+            ["09189876543", "00123", "Bob Jones", "Jones", "Personal Loan"],
+            ["09189876543", "00123", "Bob Jones", "Smith", "Personal Loan"],
+        ])
+        result = check_files(database, [source], self.options)[0]
+        self.assertEqual([row[:3] for row in result.records], [(2, "MATCHED", "3"), (3, "DIFFERENT", "3")])
+        self.assertEqual(result.differences[0][4], "Mr./Ms. Jones")
+
+    def test_title_rule_is_disclosed_and_original_values_remain_in_report(self):
+        database = self.database(rows=[["00123", "09171234567", "Alice Smith", "Mr./Ms. Smith", "CARDS"]])
+        source = self.campaign([self.alice, [*self.alice[:3], "Jones", self.alice[4]]])
+        originals = {item.path: item.path.read_bytes() for item in (database, source)}
+        result = check_files(database, [source], self.options)[0]
+        path = self.folder / "titles-report.xlsx"
+        export_report(path, database, self.options, [result])
+        book = load_workbook(path, read_only=True, data_only=True)
+        try:
+            self.assertEqual(book["File 001"]["G2"].value, "Smith")
+            self.assertEqual(book["Differences 001"]["E2"].value, "Mr./Ms. Smith")
+            coverage = {row[0]: row[1:] for row in book["Mappings 001"].iter_rows(min_row=2, values_only=True)}
+            self.assertEqual(coverage["LastName"][2], "CHECKED")
+            self.assertIn("Mr./Ms.", coverage["LastName"][3])
+            self.assertIn("suffixes remain checked", coverage["LastName"][3])
+            self.assertNotIn("titles are ignored", coverage["ChName"][3])
+        finally:
+            book.close()
+        self.assertTrue(all(path.read_bytes() == content for path, content in originals.items()))
+
     def test_aliases_preserve_header_case_and_product_comparison(self):
         headers = ["FORMATTED MOBILE", "chcode", "chNAME", "LASTNAME", "PRODUCTTYPE"]
         database_headers = ["chcode", "MOBILE PHONE", "NAME", "LAST NAME", "prod type"]

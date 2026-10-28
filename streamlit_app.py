@@ -13,18 +13,18 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 3)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 4)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 11:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 12:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
-from checker import Options, find_header, is_customer_name_column, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_pair, phone_column
+from checker import Options, find_header, is_customer_name_column, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_hsbc_mobile_pair, is_salad_endo_pair, phone_column
 from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check
 
 PREVIEW_LIMIT = 500
@@ -150,6 +150,8 @@ def render_file_details(result, run, index):
                    for item in result.mappings):
                 st.caption("Question marks are ignored when comparing customer names. Original names are kept in the report.")
                 st.caption("The replacement character (�) matches Ñ/ñ at the same position in a customer name; other letters must match.")
+            if is_hsbc_mobile_pair(result.headers, result.database_headers, result.source.column, result.database_match_column):
+                st.caption("Leading Mr./Ms., Mr. and Ms. titles are ignored in last names. The surname and suffixes are still checked; original values stay in the report.")
             if is_salad_endo_pair(result.headers, result.database_headers, result.source.column, result.database_match_column):
                 st.caption("Account number, customer name and email are checked on the same SBF endorsement record (SALAD / PL). Agentcode and Collector staff assignments are not compared.")
             elif is_datagrid_pl_viber_blast(result.headers) and result.source.column.casefold() == "debtorid":

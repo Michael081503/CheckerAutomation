@@ -15,13 +15,14 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 3
+COMPARISON_VERSION = 4
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
 CUSTOMER_NAME_ALIASES = {"name", "fullname", "chname", "chnameformat", "firstname",
                          "middlename", "lastname", "surname", "givenname", "customername",
                          "customerfullname", "debtorname", "borrowername", "accountname", "casecustomername"}
+HSBC_LAST_NAME_TITLE = re.compile(r"^(?:mr\.[ \t]*/[ \t]*ms\.|mr\.|ms\.)[ \t]+(?=\S)", re.IGNORECASE)
 
 
 @dataclass
@@ -485,9 +486,12 @@ def is_customer_name_column(header: str) -> bool:
     return re.sub(r"[^a-z0-9]", "", name.casefold()) in CUSTOMER_NAME_ALIASES
 
 
-def compare_value(value, comparison: str, options: Options, *, customer_name: bool = False) -> str:
+def compare_value(value, comparison: str, options: Options, *, customer_name: bool = False,
+                  ignore_name_title: bool = False) -> str:
     if comparison == "Text" and customer_name and isinstance(value, str):
         value = value.replace("?", "")
+        if ignore_name_title:
+            value = HSBC_LAST_NAME_TITLE.sub("", value.strip() if options.trim_spaces else value, count=1)
     if comparison == "Phone":
         text = normalize(value, options)
         if re.fullmatch(r"[+0-9()\s-]+", text):
@@ -592,6 +596,10 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
     positions = [(target.headers.index(item.file_column), table.headers.index(item.database_column), item) for item in mappings]
     customer_name_fields = {item.file_column for item in mappings
                             if is_customer_name_column(item.file_column) or is_customer_name_column(item.database_column)}
+    last_name_fields = ({item.file_column for item in mappings if item.comparison == "Text"
+                         and re.sub(r"[^a-z0-9]", "", item.database_column.casefold()) == "lastname"
+                         and item.file_column != source.column}
+                        if is_hsbc_mobile_pair(target.headers, table.headers, source.column, database.column) else set())
     name_positions = {index for index, (_, _, item) in enumerate(positions)
                       if item.comparison == "Text" and item.file_column in customer_name_fields
                       and item.file_column != source.column}
@@ -613,7 +621,8 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
         for number in numbers:
             values = database_rows[number]
             signature = tuple(compare_value(values[db_pos], item.comparison, options,
-                                             customer_name=item.file_column in customer_name_fields)
+                                             customer_name=item.file_column in customer_name_fields,
+                                             ignore_name_title=item.file_column in last_name_fields)
                               for _, db_pos, item in positions)
             database_signatures[number] = signature
             exact.setdefault((key, signature), number)
@@ -623,7 +632,8 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
         key = compare_value(values[key_position], key_mapping.comparison, options,
                             customer_name=key_mapping.file_column in customer_name_fields)
         signature = tuple(compare_value(values[file_pos], item.comparison, options,
-                                         customer_name=item.file_column in customer_name_fields)
+                                         customer_name=item.file_column in customer_name_fields,
+                                         ignore_name_title=item.file_column in last_name_fields)
                           for file_pos, _, item in positions)
         matched = exact.get((key, signature))
         blank_phone = phone_position is not None and not normalize(values[phone_position], options)
@@ -648,8 +658,10 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
             for file_pos, db_pos, item in positions:
                 actual, wanted = values[file_pos], expected[db_pos]
                 name_field = item.file_column in customer_name_fields
-                actual_text = compare_value(actual, item.comparison, options, customer_name=name_field)
-                wanted_text = compare_value(wanted, item.comparison, options, customer_name=name_field)
+                actual_text = compare_value(actual, item.comparison, options, customer_name=name_field,
+                                            ignore_name_title=item.file_column in last_name_fields)
+                wanted_text = compare_value(wanted, item.comparison, options, customer_name=name_field,
+                                            ignore_name_title=item.file_column in last_name_fields)
                 name_match = (item.comparison == "Text" and name_field and item.file_column != source.column)
                 if not (_name_text_matches(actual_text, wanted_text) if name_match else actual_text == wanted_text):
                     label = item.file_column if item.file_column == item.database_column else f"{item.file_column} → {item.database_column}"
@@ -958,6 +970,11 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                                                       or is_customer_name_column(item.database_column)):
                         rule += "; question marks are ignored in customer names"
                         rule += "; replacement character U+FFFD matches only a corresponding Ñ/ñ; other letters must match"
+                    if (item.comparison == "Text" and item.file_column != result.source.column
+                            and re.sub(r"[^a-z0-9]", "", item.database_column.casefold()) == "lastname"
+                            and is_hsbc_mobile_pair(result.headers, result.database_headers,
+                                                    result.source.column, result.database_match_column)):
+                        rule += "; leading Mr./Ms., Mr. and Ms. titles are ignored; surname and suffixes remain checked on the same CHCODE"
                     append(mapping_sheet, [header, item.database_column, item.comparison, "CHECKED", rule])
         else:
             missing = book.create_sheet(f"Missing {index:03d}")

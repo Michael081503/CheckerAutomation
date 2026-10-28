@@ -1,6 +1,6 @@
 ﻿# CHCODE Database Checker
 
-A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the lookup column, compares supported fields, and provides an Excel report download. It supports CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, PL and SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
+A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the lookup column, compares supported fields, and provides an Excel report download. It supports CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, SALAD endorsement email blasts, PL and SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
@@ -27,7 +27,7 @@ Uploaded data is processed on the app server. Each browser session keeps its own
 
 1. Add the database `.xlsx`, `.xlsm`, or `.csv` file in **Add your database**.
 2. Add multiple files in **Add files to check**. Excel and CSV files can be mixed, including files with and without headers.
-3. Review the detection summary for each file's worksheet, header row, lookup column, and status. The database needs a `CHCODE`, `primary_key`, or `indexone_uid` header, or the supported DataGrid headers. If a workbook has multiple supported worksheets, save the intended worksheet as a separate file and upload it.
+3. Review the detection summary for each file's worksheet, header row, lookup column, and status. The database needs a `CHCODE`, `primary_key`, or `indexone_uid` header, supported DataGrid headers, or the SALAD endorsement headers described below. If a workbook has multiple supported worksheets, save the intended worksheet as a separate file and upload it.
 4. Click **Check files** to compare your uploaded rows against the database; smaller campaign subsets are supported.
 5. Read the compact results, then expand a file to see its **Issues**, **Rows**, or **Fields checked**. Row previews default to entries needing review when issues exist.
 6. Click **Download Excel report** for every original row, changed value, and field mapping.
@@ -152,6 +152,28 @@ The supplied MSB PL CSV was checked against `DataGrid.xlsx`: **640 of 640 rows m
 The supplied CBS APD CSV was checked against `DataGrid (1).xlsx` (1,105 database rows): **175 of 186 uploaded rows matched across all six mapped fields**. Eleven rows have different email values; both identifiers, names, account numbers, and campaign buckets match for every row. No lookup keys are missing or blank. See `reports/CBS_APD_check_2026-10-22.xlsx` for those differences and the field coverage.
 
 The supplied CBS PL CSV was checked against its refreshed `DataGrid.xlsx` (474 database rows), explicitly using `indexone_uid` → `Old I.C.`: **474 of 474 rows matched across all six mapped fields**. Both identifiers, email, name, account number, and campaign bucket match, with no differing values, missing keys, or blank keys. See `reports/CBS_PL_check_2026-10-22.xlsx` for the results and field coverage. This database is a different snapshot from the earlier MSB PL sample.
+
+## SALAD NEW ENDO email blasts
+
+Upload `SALAD - 10282026.xlsx` as the database and `28-10-26 SBF SALAD EMAIL BLAST NEW ENDO.csv` as the file to check, then select **Check files**. The app recognizes the source workbook's `caseNo`, `caseAccountNo`, `caseCustomerName`, `caseCustomerEmail`, and `Collector` headers. Future exports with the same layout work without renaming columns or adding FLOW_STAGE.
+
+| Email-blast column | Endorsement workbook column | Check |
+| --- | --- | --- |
+| `accountnumber` | `caseAccountNo` | Account lookup; text identifiers preserve leading zeros |
+| `chname` | `caseCustomerName` | Customer name on the same account |
+| `email` | `caseCustomerEmail` | Email on the same account |
+
+Only these three fields are checked. `agentcode` is **NOT CHECKED** against `Collector`. `cc`, `bcc`, `indexone_uid`, and `primary_key` remain **NOT CHECKED**; blank legacy identifiers do not prevent account-number lookup. The header row is excluded. A present FLOW_STAGE still needs consistent, nonblank values. Existing customer-name comparison rules apply, and original values remain in the report.
+
+Wrong names or emails are **DIFFERENT** even if they belong to another account in the workbook. Unknown and blank account numbers are **NOT FOUND** and **BLANK KEY**. Duplicate accounts require all three mapped values to match one database row. Missing required campaign columns are errors. Other DataGrid and CHCODE layouts keep their existing lookup rules.
+
+The supplied blast contains 16 data rows; all 16 match across the three selected fields. The workbook contains 17 accounts. The remaining account has a blank email and is absent from the blast; campaign subsets are allowed. See `reports/SBF_SALAD_NEW_ENDO_check_2026-10-28.xlsx`.
+
+The command-line checker detects this pair too:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_files.py --database "..\AUTOCHECKER\SALAD - 10282026.xlsx" --files "..\AUTOCHECKER\28-10-26 SBF SALAD EMAIL BLAST NEW ENDO.csv" --output "reports\SBF_SALAD_NEW_ENDO_check_2026-10-28.xlsx"
+```
 
 ## Headerless files and row results
 

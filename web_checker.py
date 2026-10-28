@@ -15,10 +15,10 @@ from typing import Callable
 
 from checker import (
     CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, check_files, chcode_columns, export_report,
-    find_header, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, match_column, normalize, phone_column, read_table, sheet_names,
+    find_header, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, match_column, normalize, phone_column, read_table, sheet_names,
 )
 
-AUTO_DETECTION_VERSION = 9
+AUTO_DETECTION_VERSION = 10
 
 
 @dataclass(frozen=True)
@@ -99,8 +99,13 @@ def inspect_upload(upload: Upload, sheet: str | None = None, *, has_headers: boo
         return Inspection(tuple(names), table.sheet, tuple(table.headers), column, table.header_row, has_headers)
 
 
-def _key_column(table: Table, database_keys: set[str]) -> tuple[str, str]:
+def _key_column(table: Table, database_keys: set[str], database_headers=()) -> tuple[str, str]:
     """Choose one lookup for the entire file; unmatched rows never switch keys."""
+    if is_salad_endo_pair(table.headers, database_headers):
+        return match_column(table.headers, database_headers), "SALAD endorsement layout detected; accountnumber matches caseAccountNo; email and chname are checked on the same account. Staff assignments are not checked"
+    if (is_salad_endo_database(database_headers) and not find_header(database_headers, "CHCODE")
+            and not find_header(table.headers, "CHCODE")):
+        raise ValueError("SALAD endorsement email files require accountnumber, chname, and email columns.")
     if is_datagrid_pl_viber_blast(table.headers):
         return match_column(table.headers), "PL Viber layout detected; Debtorid matches DataGrid Debtor ID; FullName and Phone are checked against Name and Last Called No. on the same row"
     if is_datagrid_viber_blast(table.headers):
@@ -147,8 +152,7 @@ def _detect_file_table(path: Path, sheet: str, database: Table,
         "lastname", "producttype", "product_type", "chname_format", "ob_at_endorsement",
     }
     if headered is not None:
-        columns = chcode_columns(headered.headers)
-        key = columns[0] if columns else match_column(headered.headers)
+        key = match_column(headered.headers, database.headers)
         recognized = sum(header.casefold() in known_headers or bool(phone_column([header]))
                          for header in headered.headers)
         first_key_matches = bool(raw and raw.rows
@@ -200,7 +204,7 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                     database_errors.append(str(error))
             if not candidates:
                 raise ValueError(database_errors[0] if database_errors else
-                                 "The database must have a CHCODE header (CHCODE, primary_key, or indexone_uid) or the supported DataGrid headers: Name, Old I.C., Account No., and Email.")
+                                 "The database must have a CHCODE header (CHCODE, primary_key, or indexone_uid), supported DataGrid headers, or the SALAD endorsement columns: caseNo, caseAccountNo, caseCustomerName, caseCustomerEmail, and Collector.")
             if len(candidates) > 1:
                 raise ValueError("Multiple database worksheets have supported headers. Upload a workbook with one database worksheet.")
             table, database_column = candidates[0]
@@ -234,7 +238,7 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                 if len(candidates) > 1:
                     raise ValueError("Multiple worksheets contain file data. Upload a workbook with one data worksheet.")
                 target, has_headers = candidates[0]
-                column, note = _key_column(target, database_keys) if has_headers else (
+                column, note = _key_column(target, database_keys, table.headers) if has_headers else (
                     "CHCODE", "No headers detected; column B is CHCODE and row 1 is included")
                 if (has_headers and phone_column(target.headers)
                         and not is_datagrid_viber_blast(target.headers) and not is_datagrid_pl_viber_blast(target.headers)

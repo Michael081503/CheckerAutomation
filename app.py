@@ -234,18 +234,22 @@ class CheckerApp(tk.Tk):
         return [name for name in item['headers'] if name.casefold() in names or name == item['column']]
 
     @staticmethod
-    def _inspect(path, sheet=None, sheets=None):
+    def _inspect(path, sheet=None, sheets=None, database_headers=None):
         names = sheets or sheet_names(path)
         table = read_table(path, sheet or names[0])
-        column = match_column(table.headers)
+        column = match_column(table.headers, database_headers)
         return {"path": Path(path), "sheet": table.sheet, "sheets": names,
                 "column": column, "headers": table.headers, "header_row": table.header_row,
-                "rows": len(table.rows), "error": "" if column else "Missing CHCODE header or supported DataGrid layout"}
+                "rows": len(table.rows), "error": "" if column else "Missing CHCODE header or supported DataGrid / SALAD endorsement layout"}
 
     def _set_database(self, data):
+        previous_headers = self.database['headers'] if self.database else None
         self.database = data
-        for item in self.files.values():
+        for key, item in self.files.items():
             item.pop('mappings', None)
+            if item['column'] == match_column(item['headers'], previous_headers):
+                item['column'] = match_column(item['headers'], data['headers'])
+                self.file_tree.item(key, values=self._file_values(item))
         self.db_label.set(str(data['path']))
         self.db_sheet.configure(values=data['sheets'])
         self.db_sheet.set(data['sheet'])
@@ -254,7 +258,7 @@ class CheckerApp(tk.Tk):
         self._invalidate()
         self.status.set(data['error'] or f"Database ready: {data['column']} header found on row {data['header_row']}; {data['rows']:,} data rows. Add files to check.")
         if data['error']:
-            messagebox.showwarning("Match header required", "Choose a worksheet with CHCODE, or a DataGrid export containing Old I.C., Name, Account No., and Email. Headers below the first row are detected automatically.", parent=self)
+            messagebox.showwarning("Match header required", "Choose a worksheet with CHCODE, a supported DataGrid export, or SALAD endorsement columns including caseAccountNo, caseNo, caseCustomerName, caseCustomerEmail, and Collector. Headers below the first row are detected automatically.", parent=self)
 
     def _choose_database(self):
         path = filedialog.askopenfilename(title="Choose the database", filetypes=FILE_TYPES, parent=self)
@@ -284,7 +288,7 @@ class CheckerApp(tk.Tk):
             items = []
             for path in paths:
                 try:
-                    items.append(self._inspect(path))
+                    items.append(self._inspect(path, database_headers=self.database['headers'] if self.database else None))
                 except Exception as error:
                     items.append({"path": path, "sheet": "", "sheets": [], "column": "", "headers": [], "rows": 0, "error": str(error)})
             return items
@@ -316,7 +320,8 @@ class CheckerApp(tk.Tk):
             self._invalidate()
             self._select_file()
             self.status.set(item['error'] or "Worksheet updated. Ready to check.")
-        self._background(lambda: self._inspect(data['path'], sheet, data['sheets']), done, "Reading selected worksheet…")
+        self._background(lambda: self._inspect(data['path'], sheet, data['sheets'],
+                                              self.database['headers'] if self.database else None), done, "Reading selected worksheet…")
 
     def _select_file(self, event=None):
         selected = self.file_tree.selection()

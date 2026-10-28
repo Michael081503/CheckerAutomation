@@ -43,7 +43,7 @@ If Cloud still reports `cannot import name 'is_datagrid_pl_viber_blast'`, verify
 
 1. Upload the database under **Add your database**.
 2. Upload multiple CSV or Excel files under **Add files to check**. Files with and without headers can be mixed. For the MSB or CBS PL email blast, upload the corresponding `DataGrid.xlsx` snapshot as the database; for the CBS APD email blast, upload `DataGrid (1).xlsx`.
-3. Review the automatic detection summary: it shows each file's worksheet, header row, lookup column, and status. The database must contain `CHCODE`, `primary_key`, or `indexone_uid`, or the recognized DataGrid headers: `Name`, `Old I.C.`, `Account No.`, and `Email`. A workbook with multiple supported worksheets must be split into separate files before upload.
+3. Review the automatic detection summary: it shows each file's worksheet, header row, lookup column, and status. The database must contain `CHCODE`, `primary_key`, or `indexone_uid`, the recognized DataGrid headers (`Name`, `Old I.C.`, `Account No.`, and `Email`), or the SALAD endorsement headers described below. A workbook with multiple supported worksheets must be split into separate files before upload.
 4. Select **Check files**. The app compares uploaded rows against the database and automatically maps the supported HSBC or DataGrid fields. Campaign subsets are supported.
 5. Read the compact pass/review results. Expand an individual file for its issues, row preview, or field coverage, then download the Excel report.
 
@@ -60,6 +60,8 @@ For the HSBC mobile blasts, add `HSBC DB as of Oct 23, 2026.xlsx` as the databas
 For the SBF SALAD Viber blasts, add `DataGrid salad.xlsx` as the database and the Level 1, 3, and 5 CSVs as files to check. The app recognizes their full ten-column layout and matches `Phone` with `Last Called No.`, then checks `FullName` against `Name` on the same DataGrid row. Both fields must match to pass. The report lists unknown phones, blank phones, and changed names, along with the actual database lookup column. Other campaign fields, including `CHCode` and campaign amounts, remain **NOT CHECKED**. This format can omit FLOW_STAGE; other CHCODE layouts retain their account-based checks.
 
 Question marks are ignored when comparing customer names in both uploaded and database rows. Original names remain in source rows and reports, and genuine name differences still require review.
+
+For SALAD NEW ENDO email blasts, upload the `SALAD - 10282026.xlsx` endorsement workbook and the matching CSV. Its accountnumber is looked up in caseAccountNo; chname and email are compared with caseCustomerName and caseCustomerEmail on that same row. Agentcode is not compared with Collector, and blank legacy identifier columns remain unchecked. The source workbook is recognized by its caseNo, caseAccountNo, caseCustomerName, caseCustomerEmail, and Collector headers. Header rows are excluded, and campaign subsets are allowed.
 
 In customer names, the replacement character `�` matches a corresponding `Ñ` or `ñ` at the same position on the same account. Every other character and mapped field must agree. It is not a wildcard for other letters, IDs, emails, or notes. Files with headers exclude the header row and preamble from account checks and totals; files without headers retain their first data row.
 

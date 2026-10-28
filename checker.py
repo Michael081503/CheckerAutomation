@@ -15,13 +15,13 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 1
+COMPARISON_VERSION = 2
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
 CUSTOMER_NAME_ALIASES = {"name", "fullname", "chname", "chnameformat", "firstname",
                          "middlename", "lastname", "surname", "givenname", "customername",
-                         "customerfullname", "debtorname", "borrowername", "accountname"}
+                         "customerfullname", "debtorname", "borrowername", "accountname", "casecustomername"}
 
 
 @dataclass
@@ -155,6 +155,12 @@ def is_datagrid_database(headers: Iterable) -> bool:
     return {"name", "old i.c.", "account no.", "email"}.issubset(names)
 
 
+def is_salad_endo_database(headers: Iterable) -> bool:
+    """Recognize a SALAD endorsement workbook by its source-system columns."""
+    return {"caseno", "caseaccountno", "casecustomername", "casecustomeremail", "collector"}.issubset(
+        _header_names(headers))
+
+
 def is_datagrid_email_blast(headers: Iterable) -> bool:
     """Recognize email-blast fields that have DataGrid counterparts."""
     names = _header_names(headers)
@@ -180,9 +186,10 @@ def is_cbs_apd_email_blast(headers: Iterable) -> bool:
     return is_datagrid_email_blast(names) and {"primary_key", "campaignbucket"}.issubset(names)
 
 
-def match_column(headers: Iterable[str]) -> str:
-    """Select the CHCODE key, including aliases in ordinary header layouts."""
+def match_column(headers: Iterable[str], database_headers: Iterable[str] | None = None) -> str:
+    """Select the lookup column, using the database schema for account blasts."""
     headers = list(headers)
+    database_headers = list(database_headers) if database_headers is not None else None
     if is_datagrid_pl_viber_blast(headers):
         return next(header for header in headers if header.strip().casefold() == "debtorid")
     if is_datagrid_viber_blast(headers):
@@ -192,6 +199,12 @@ def match_column(headers: Iterable[str]) -> str:
             return header
     if is_datagrid_database(headers):
         return next(header for header in headers if header.strip().casefold() == "old i.c.")
+    if is_salad_endo_database(headers):
+        return next(header for header in headers if header.strip().casefold() == "caseaccountno")
+    if (database_headers is not None and not _has_chcode(database_headers)
+            and is_salad_endo_database(database_headers)
+            and {"email", "chname", "accountnumber"}.issubset(_header_names(headers))):
+        return next(header for header in headers if header.strip().casefold() == "accountnumber")
     if is_datagrid_email_blast(headers):
         keys = ("primary_key", "indexone_uid") if is_cbs_apd_email_blast(headers) else ("indexone_uid", "primary_key")
         for expected in keys:
@@ -200,6 +213,18 @@ def match_column(headers: Iterable[str]) -> str:
                     return header
     aliases = chcode_columns(headers)
     return aliases[0] if aliases else ""
+
+
+def is_salad_endo_pair(file_headers: Iterable[str], database_headers: Iterable[str],
+                       file_key: str | None = None, database_key: str | None = None) -> bool:
+    file_headers, database_headers = list(file_headers), list(database_headers)
+    file_key = match_column(file_headers, database_headers) if file_key is None else file_key
+    database_key = match_column(database_headers) if database_key is None else database_key
+    return (not _has_chcode(file_headers) and not _has_chcode(database_headers)
+            and is_salad_endo_database(database_headers)
+            and {"email", "chname", "accountnumber"}.issubset(_header_names(file_headers))
+            and file_key.strip().casefold() == "accountnumber"
+            and database_key.strip().casefold() == "caseaccountno")
 
 
 def is_datagrid_pair(file_headers: Iterable[str], database_headers: Iterable[str],
@@ -257,6 +282,7 @@ def is_filename_identified_pair(file_headers: Iterable[str], database_headers: I
     return (is_datagrid_pair(file_headers, database_headers, file_key, database_key)
             or is_datagrid_viber_pair(file_headers, database_headers, file_key, database_key)
             or is_datagrid_pl_viber_pair(file_headers, database_headers, file_key, database_key)
+            or is_salad_endo_pair(file_headers, database_headers, file_key, database_key)
             or is_hsbc_mobile_pair(file_headers, database_headers, file_key, database_key))
 
 
@@ -266,7 +292,8 @@ def _has_supported_header(values: Iterable) -> bool:
     identifier_layout = bool(names & set(CHCODE_ALIASES[1:])) and bool(
         names & {"flow_stage", "name", "email", "chname", "accountnumber"})
     return (_has_chcode(values) or bool(phone_column(names)) or is_datagrid_database(values)
-            or is_datagrid_email_blast(values) or identifier_layout)
+            or is_datagrid_email_blast(values) or is_salad_endo_database(values)
+            or {"email", "chname", "accountnumber"}.issubset(names) or identifier_layout)
 
 
 def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
@@ -392,6 +419,11 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
                      file_key: str, database_key: str) -> list[ColumnMapping]:
     """Direct header matches and explicit HSBC export aliases; never infer by position."""
     database_names = {name.casefold(): name for name in database_headers}
+    if is_salad_endo_pair(file_headers, database_headers, file_key, database_key):
+        # Campaign agent assignments and blank legacy IDs are not account keys.
+        fields = {"accountnumber": "caseAccountNo", "chname": "caseCustomerName", "email": "caseCustomerEmail"}
+        return [ColumnMapping(name, database_names[fields[name.casefold()].casefold()])
+                for name in file_headers if name.casefold() in fields]
     if is_datagrid_pl_viber_pair(file_headers, database_headers, file_key, database_key):
         # PL campaign columns contain staff names/codes and template values.
         # Only these three fields have established database counterparts.
@@ -681,6 +713,10 @@ def check_files(database: Source, files: list[Source], options: Options,
             if source.column not in target.headers:
                 raise ValueError(f"Match column '{source.column}' no longer exists.")
             comparison_database, comparison_lookup = database, lookup
+            if (options.mapped_fields and source.has_headers and is_salad_endo_database(table.headers)
+                    and not _has_chcode(table.headers) and not _has_chcode(target.headers)
+                    and not is_salad_endo_pair(target.headers, table.headers, source.column, database.column)):
+                raise ValueError("SALAD endorsement email checks require accountnumber, chname, and email, using accountnumber to match caseAccountNo.")
             if (options.mapped_fields and is_datagrid_pl_viber_blast(target.headers)
                     and source.column.casefold() == "debtorid"):
                 if not is_datagrid_pl_viber_pair(target.headers, table.headers, source.column, database.column):
@@ -891,11 +927,23 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                 if header == result.flow_stage_column:
                     append(mapping_sheet, [header, "", "", "FILE IDENTIFIER", "Labels the file; row data is compared against database records by CHCODE"])
                 elif item is None:
-                    append(mapping_sheet, [header, "", "", "NOT CHECKED", "No database mapping selected"])
+                    rule = "No database mapping selected"
+                    if is_salad_endo_pair(result.headers, result.database_headers,
+                                          result.source.column, result.database_match_column):
+                        if header.casefold() == "agentcode":
+                            rule = "Staff assignments are not compared with Collector; only account number, name and email are checked"
+                        elif header.casefold() in CHCODE_ALIASES[1:]:
+                            rule = "Not used for this layout; accountnumber identifies the caseAccountNo record"
+                    append(mapping_sheet, [header, "", "", "NOT CHECKED", rule])
                 else:
                     rule = {"Text": "Uses case and space options", "Number": "Numeric equality; commas ignored",
                             "Product": "Credit Card = CARDS; Personal Loan = LOAN",
                             "Phone": "Matches the phone number for the same CHCODE; Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison"}[item.comparison]
+                    if is_salad_endo_pair(result.headers, result.database_headers,
+                                          result.source.column, result.database_match_column):
+                        rule = ("Finds database rows by accountnumber = caseAccountNo; all mapped fields must match the same row"
+                                if header == result.source.column else
+                                "Compares the value on the same caseAccountNo record; uses case and space options")
                     if item.comparison == "Phone" and item.file_column == result.source.column:
                         rule = "Finds database rows by phone; all mapped fields must match the same row. Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison"
                     if is_datagrid_pl_viber_pair(result.headers, result.database_headers,

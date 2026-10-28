@@ -25,18 +25,19 @@ def main():
         if value is not None and not value.strip():
             parser.error(f"--{name.replace('_', '-')} must name a column header.")
 
-    def source(path, sheet=None, key=None):
+    def source(path, sheet=None, key=None, database_headers=None):
         table = read_table(path, sheet, headers_only=True)
         # Preserve a missing explicit column so the checker reports an error,
         # rather than silently falling back to a different lookup key.
-        column = (find_header(table.headers, key) or key.strip()) if key is not None else (match_column(table.headers) or "CHCODE")
+        column = (find_header(table.headers, key) or key.strip()) if key is not None else (match_column(table.headers, database_headers) or "CHCODE")
         return Source(path, table.sheet, column)
 
     database = source(arguments.database, arguments.database_sheet, arguments.database_key)
+    database_headers = read_table(database.path, database.sheet, headers_only=True).headers
     files = []
     for path in arguments.files:
         try:
-            files.append(source(path, key=arguments.file_key))
+            files.append(source(path, key=arguments.file_key, database_headers=database_headers))
         except Exception:
             # Let the checker report one bad file while continuing the others.
             files.append(Source(path, "", arguments.file_key.strip() if arguments.file_key is not None else "CHCODE"))

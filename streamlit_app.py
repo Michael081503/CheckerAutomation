@@ -13,18 +13,18 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 1)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 2)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 9:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 10:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
-from checker import Options, find_header, is_customer_name_column, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, phone_column
+from checker import Options, find_header, is_customer_name_column, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_pair, phone_column
 from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check
 
 PREVIEW_LIMIT = 500
@@ -150,7 +150,9 @@ def render_file_details(result, run, index):
                    for item in result.mappings):
                 st.caption("Question marks are ignored when comparing customer names. Original names are kept in the report.")
                 st.caption("The replacement character (�) matches Ñ/ñ at the same position in a customer name; other letters must match.")
-            if is_datagrid_pl_viber_blast(result.headers) and result.source.column.casefold() == "debtorid":
+            if is_salad_endo_pair(result.headers, result.database_headers, result.source.column, result.database_match_column):
+                st.caption("Account number, customer name and email are checked on the same SALAD endorsement record. Agentcode and Collector staff assignments are not compared.")
+            elif is_datagrid_pl_viber_blast(result.headers) and result.source.column.casefold() == "debtorid":
                 st.caption("Debtorid is matched to DataGrid Debtor ID; FullName and Phone must match Name and Last Called No. on the same database row. Staff and campaign fields are not checked.")
             elif is_datagrid_viber_blast(result.headers) and result.source.column.casefold() == "phone":
                 st.caption("Phone is matched to DataGrid Last Called No.; FullName must match Name on the same database row. CHCode and campaign amounts are not checked.")
@@ -246,7 +248,9 @@ def main():
                 "Header row": (str(info.header_row) if info and item.source.has_headers
                                else "No headers" if info else ""),
                 "Lookup column": item.source.column if info else "",
-                "Check": ("Viber debtor ID, phone and name" if info and is_datagrid_pl_viber_blast(info.headers)
+                "Check": ("Account number, name and email" if info and prepared.database_info
+                          and is_salad_endo_pair(info.headers, prepared.database_info.headers, item.source.column, prepared.database.column)
+                          else "Viber debtor ID, phone and name" if info and is_datagrid_pl_viber_blast(info.headers)
                           else "Viber phone and name" if info and is_datagrid_viber_blast(info.headers)
                           else "Phone by CHCODE" if info and info.has_headers
                           and not find_header(info.headers, "FLOW_STAGE") and phone_column(info.headers)
@@ -273,6 +277,7 @@ def main():
     st.caption("Files without FLOW_STAGE use CHCODE to compare phone numbers with the matching database record.")
     st.caption("SALAD Viber blasts use Phone and FullName to check the same DataGrid row.")
     st.caption("PL Viber blasts use Debtorid to check FullName and Phone against the same DataGrid record.")
+    st.caption("SALAD endorsement email blasts use accountnumber to check the name and email against caseAccountNo in the endorsement workbook.")
     st.caption("Uploads are processed in this session. Start over clears the current uploads and results.")
 
     options = Options(ignore_case=True, trim_spaces=True, mapped_fields=True,

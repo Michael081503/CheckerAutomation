@@ -33,6 +33,12 @@ Upload actual database and campaign files through the app. They are not required
 
 These repository, entrypoint, and Python-version settings follow Streamlit's [official deployment guide](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy). The pinned Streamlit version is `1.54.0`; openpyxl is `3.1.5`.
 
+## Recover after a source update
+
+The entrypoint refreshes an older in-memory checker and upload adapter before importing Debtor ID support. This handles a Cloud process that reruns the updated app while retaining modules from the previous release. Normal reruns preserve the loaded modules and current results.
+
+If Cloud still reports `cannot import name 'is_datagrid_pl_viber_blast'`, verify the app uses this repository's `main` branch and `streamlit_app.py`, then select **Manage app → ⋮ → Reboot app** and confirm **Reboot**. This clears the process memory and reloads the repository source. See Streamlit's [reboot instructions](https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app/reboot-your-app).
+
 ## Use the deployed app
 
 1. Upload the database under **Add your database**.

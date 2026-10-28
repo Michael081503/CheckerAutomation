@@ -2,7 +2,26 @@
 
 from __future__ import annotations
 
+import importlib
+
 import streamlit as st
+
+import checker as _checker
+
+# A Cloud update can rerun this file while Python still holds older imports.
+# Refresh the engine before importing new symbols, then refresh its dependent
+# adapter so detection and comparison use the same release. Ordinary reruns
+# keep their module objects and session results.
+_engine_refreshed = not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
+if _engine_refreshed:
+    importlib.invalidate_caches()
+    importlib.reload(_checker)
+
+import web_checker as _web_checker
+
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 8:
+    importlib.invalidate_caches()
+    importlib.reload(_web_checker)
 
 from checker import Options, find_header, is_customer_name_column, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, phone_column
 from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check

@@ -1,6 +1,6 @@
 ﻿# CHCODE Database Checker
 
-A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the lookup column, compares supported fields, and provides an Excel report download. It supports CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
+A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the lookup column, compares supported fields, and provides an Excel report download. It supports CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, PL and SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
@@ -13,7 +13,7 @@ python -m pip install -r requirements.txt
 python -m streamlit run streamlit_app.py
 ```
 
-On Windows, **Start Checker.bat** launches the same app in your browser. Keep the terminal open while using the local app. The Streamlit app requires Python 3.10+; it was tested on Python 3.13.
+On Windows, **Start Checker.bat** launches the same app in your browser. It uses this folder's `.venv` when available, otherwise the `python` command. Keep the terminal open while using the local app. The Streamlit app requires Python 3.10+; it was tested on Python 3.13.
 
 ## Deploy to Streamlit Community Cloud
 
@@ -59,6 +59,44 @@ Phone comparison accepts equivalent single Philippine mobile numbers in `+639`, 
 Successful checks without a stage show **MAPPED ROWS MATCH**. Wrong or blank phone numbers show **DIFFERENT**, including when the database phone is also blank. Unknown CHCODEs show **NOT FOUND**; blank CHCODEs show **BLANK KEY**. Repeated uploaded rows are checked independently, and duplicate database CHCODEs are compared using their mapped values. The app and Excel report show the expected number from the same account and disclose all field coverage. A present FLOW_STAGE column still needs one consistent, nonblank value. Explicit engine and command-line checks retain their existing FLOW_STAGE requirements, including full-copy comparison; the automatic app enables missing-stage checks with `Options.allow_missing_flow_stage` in uploaded-row mode.
 
 The database and uploaded files can have titles, notes, or blank rows above their column headers. The app detects `CHCODE`, `primary_key`, `indexone_uid`, or the recognized DataGrid header layout, ignoring letter case and outer spaces, and skips the rows above it. The detection summary displays the worksheet, header row, and lookup column. Source row numbers in results and reports retain their original positions.
+
+## SBF PL Viber blasts with DataGrid
+
+1. Double-click **Start Checker.bat**.
+2. Add `DataGrid(1).xlsx` in **Add your database**.
+3. Add `27-10-26 SBF PL VIBER BLAST Level_1.csv`, `Level_3.csv`, and `Level_5.csv` in **Add files to check**.
+4. Click **Check files**, review the differences, and download the Excel report.
+
+These files are in `C:\Users\SPM\Desktop\AUTOCHECKER`. The layout is detected from its headers, so future exports with the same layout also work without changing filenames or adding FLOW_STAGE. A present FLOW_STAGE still requires a consistent, nonblank value.
+
+PL Viber files contain `Level` and `Debtorid`. Their `CHCode` and `FirstName` values are staff codes and names. The checker uses the customer identifier instead:
+
+| PL Viber column | DataGrid column | Comparison |
+| --- | --- | --- |
+| `Debtorid` | `Debtor ID` | Customer lookup; text identifiers preserve leading zeros |
+| `FullName` | `Name` | Customer name on the same Debtor ID record |
+| `Phone` | `Last Called No.` | Phone on the same Debtor ID record |
+
+All three fields must match one database row. A phone belonging to another customer produces **DIFFERENT** even if that phone exists elsewhere in DataGrid. Equivalent Philippine mobile formats match, and the existing customer-name rule ignores question marks. A blank phone produces **DIFFERENT**, including when the database phone is blank. Unknown and blank debtor IDs produce **NOT FOUND** and **BLANK KEY**. Repeated uploaded records are checked independently. Duplicate database debtor IDs pass only when all mapped fields match one row.
+
+`FirstName`, `LastName`, `CHCode`, `OB`, `Monthly`, `Terms`, `Promo`, and `Level` remain **NOT CHECKED**. The report preserves every uploaded value, lists the actual database lookup column per file, and shows file and database values for each difference. A passing result covers the three mapped fields. PL, SALAD, and ordinary CHCODE files retain their own lookup rules within a mixed batch.
+
+The supplied database contains 2,342 records. The supplied PL Viber files contain 2,338 rows; every debtor ID was found:
+
+| File | Rows | Matched | Rows needing review |
+| --- | ---: | ---: | ---: |
+| Level_1 | 148 | 120 | 28 |
+| Level_3 | 111 | 102 | 9 |
+| Level_5 | 2,079 | 1,932 | 147 |
+| Total | 2,338 | 2,154 | 184 |
+
+There are 23 name differences and 162 phone differences; one row has both. See `reports/SBF_PL_VIBER_check_2026-10-27.xlsx`. Uploaded-row checks allow campaign subsets, so unused database records do not count as missing from the campaign files.
+
+The existing command-line checker detects this pair too:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_files.py --database "..\AUTOCHECKER\DataGrid(1).xlsx" --files "..\AUTOCHECKER\27-10-26 SBF PL VIBER BLAST Level_1.csv" "..\AUTOCHECKER\27-10-26 SBF PL VIBER BLAST Level_3.csv" "..\AUTOCHECKER\27-10-26 SBF PL VIBER BLAST Level_5.csv" --output "reports\SBF_PL_VIBER_check.xlsx"
+```
 
 ## SBF SALAD Viber blasts with DataGrid
 

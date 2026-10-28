@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
+from test_sbf_pl_viber import BLAST_HEADERS as PL_HEADERS, pl_database, pl_row
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
 from test_web_checker import cbs_apd_uploads, cbs_pl_uploads, csv_upload, database_upload, datagrid_upload, email_blast_upload, hsbc_mobile_uploads, xlsx_upload
@@ -283,6 +284,24 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(len(coverage), 3)
         self.assertTrue(all(list(frame["Coverage"]).count("CHECKED") == 2 for frame in coverage))
         self.assertTrue(any("FullName must match Name on the same database row" in caption.value
+                            for caption in self.app.caption))
+        self.assertEqual(len(self.app.get("download_button")), 1)
+
+    def test_pl_viber_uses_debtor_id_and_shows_differences_and_field_coverage(self):
+        self.database = BrowserFile(pl_database())
+        self.files = [BrowserFile(csv_upload("PL.csv", [
+            PL_HEADERS, pl_row(), pl_row("1001", "Bob Jones", "09181234567"),
+        ]))]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual((result.count("MATCHED"), result.count("DIFFERENT")), (1, 1))
+        self.assertEqual(result.database_match_column, "Debtor ID")
+        self.assertEqual(self.detection_rows().iloc[0]["Lookup column"], "Debtorid")
+        self.assertEqual(self.detection_rows().iloc[0]["Check"], "Viber debtor ID, phone and name")
+        coverage = next(frame.value for frame in self.app.dataframe if "Coverage" in frame.value.columns)
+        self.assertEqual(list(coverage["Coverage"]).count("CHECKED"), 3)
+        self.assertTrue(any("Debtorid is matched to DataGrid Debtor ID" in caption.value
                             for caption in self.app.caption))
         self.assertEqual(len(self.app.get("download_button")), 1)
 

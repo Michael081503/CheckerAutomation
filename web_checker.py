@@ -15,10 +15,10 @@ from typing import Callable
 
 from checker import (
     CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, check_files, chcode_columns, export_report,
-    find_header, is_datagrid_viber_blast, match_column, normalize, phone_column, read_table, sheet_names,
+    find_header, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, match_column, normalize, phone_column, read_table, sheet_names,
 )
 
-AUTO_DETECTION_VERSION = 7
+AUTO_DETECTION_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -101,6 +101,8 @@ def inspect_upload(upload: Upload, sheet: str | None = None, *, has_headers: boo
 
 def _key_column(table: Table, database_keys: set[str]) -> tuple[str, str]:
     """Choose one lookup for the entire file; unmatched rows never switch keys."""
+    if is_datagrid_pl_viber_blast(table.headers):
+        return match_column(table.headers), "PL Viber layout detected; Debtorid matches DataGrid Debtor ID; FullName and Phone are checked against Name and Last Called No. on the same row"
     if is_datagrid_viber_blast(table.headers):
         return match_column(table.headers), "SALAD Viber layout detected; Phone matches DataGrid Last Called No. and FullName is checked against Name on the same row"
     chcode = find_header(table.headers, "CHCODE")
@@ -234,7 +236,8 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                 target, has_headers = candidates[0]
                 column, note = _key_column(target, database_keys) if has_headers else (
                     "CHCODE", "No headers detected; column B is CHCODE and row 1 is included")
-                if (has_headers and phone_column(target.headers) and not is_datagrid_viber_blast(target.headers)
+                if (has_headers and phone_column(target.headers)
+                        and not is_datagrid_viber_blast(target.headers) and not is_datagrid_pl_viber_blast(target.headers)
                         and not find_header(target.headers, "FLOW_STAGE")):
                     note += "; no FLOW_STAGE detected; phone numbers are compared for the same CHCODE"
                 info = Inspection(names, target.sheet, tuple(target.headers), column,

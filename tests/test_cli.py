@@ -12,6 +12,7 @@ from openpyxl import Workbook, load_workbook
 
 from scripts.check_files import main
 from test_sbf_salad_viber import salad_viber_uploads
+from test_sbf_pl_viber import pl_viber_uploads
 from test_web_checker import hsbc_mobile_uploads
 
 
@@ -84,6 +85,22 @@ class CommandLineTests(unittest.TestCase):
         self.assertTrue(all(row["file_key"] == "Phone" and row["database_key"] == "Last Called No."
                             for row in results))
         self.assertTrue(all(row["matched"] == 2 and row["checked_fields"] == 2 for row in results))
+
+    def test_pl_viber_cli_uses_debtor_id_and_preserves_sources(self):
+        database, files = pl_viber_uploads()
+        self.database.write_bytes(database.data)
+        paths = []
+        for upload in files:
+            path = self.folder / upload.name
+            path.write_bytes(upload.data)
+            paths.append(path)
+        originals = {path: path.read_bytes() for path in [self.database, *paths]}
+        exit_code, results = self.run_cli(files=paths)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(results), 3)
+        self.assertTrue(all(row["file_key"] == "Debtorid" and row["database_key"] == "Debtor ID"
+                            and row["matched"] == 2 and row["checked_fields"] == 3 for row in results))
+        self.assertTrue(all(path.read_bytes() == data for path, data in originals.items()))
 
     def test_default_bucket_lookup_remains_primary_key(self):
         exit_code, results = self.run_cli()

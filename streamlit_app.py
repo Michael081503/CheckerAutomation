@@ -13,14 +13,14 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 4)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 5)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 12:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 13:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 

@@ -7,7 +7,7 @@ import re
 from collections import defaultdict, deque
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from itertools import chain
 from pathlib import Path
 from typing import Callable, Iterable
@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 4
+COMPARISON_VERSION = 5
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -297,6 +297,40 @@ def _has_supported_header(values: Iterable) -> bool:
             or {"email", "chname", "accountnumber"}.issubset(names) or identifier_layout)
 
 
+def _is_datagrid_total(headers: list[str], records: list[tuple[int, tuple]]) -> bool:
+    """Identify a final count-and-sums footer without hiding blank-key accounts."""
+    if not is_datagrid_database(headers) or len(records) < 2:
+        return False
+    names = [name.casefold() for name in headers]
+    if "no" not in names:
+        return False
+    footer = records[-1][1]
+    amount_columns = {"amount referred", "balance", "ptp amount", "monthly instalment",
+                      "last payment amount (uploaded to volare)"}
+    populated = {index for index, value in enumerate(footer)
+                 if value is not None and str(value).strip()}
+    count_position = names.index("no")
+    amounts = populated - {count_position}
+    if (count_position not in populated or not amounts
+            or any(names[index] not in amount_columns for index in amounts)):
+        return False
+
+    def number(value):
+        return Decimal(str(value).strip().replace(",", ""))
+
+    try:
+        if number(footer[count_position]) != len(records) - 1:
+            return False
+        for index in amounts:
+            total = sum((number(values[index]) for _, values in records[:-1]
+                         if values[index] is not None and str(values[index]).strip()), Decimal(0))
+            if not total.is_finite() or total != number(footer[index]):
+                return False
+    except (InvalidOperation, ValueError):
+        return False
+    return True
+
+
 def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
            headers_only: bool = False) -> Table:
     iterator = iter(rows)
@@ -360,6 +394,8 @@ def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
             if any(value is not None and str(value).strip() for value in values[len(headers):]):
                 raise ValueError(f"{path.name}: row {number} contains data under an unnamed column.")
             records.append((number, values[:len(headers)] + (None,) * max(0, len(headers) - len(values))))
+    if _is_datagrid_total(headers, records):
+        records.pop()
     return Table(path, sheet, headers, records, header_row=header_row)
 
 
@@ -394,7 +430,12 @@ def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = Fal
         selected = sheet or book.sheetnames[0]
         if selected not in book.sheetnames:
             raise ValueError(f"Sheet '{selected}' no longer exists in {path.name}.")
-        reader = book[selected].iter_rows(values_only=True)
+        worksheet = book[selected]
+        # Some DataGrid exports claim a range such as A1:C1 even when the
+        # worksheet XML contains all account columns and thousands of rows.
+        # Read the actual cells so stale dimensions cannot truncate validation.
+        worksheet.reset_dimensions()
+        reader = worksheet.iter_rows(values_only=True)
         return _table(path, selected, reader, has_headers=has_headers, headers_only=headers_only)
     finally:
         book.close()

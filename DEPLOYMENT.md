@@ -35,6 +35,8 @@ These repository, entrypoint, and Python-version settings follow Streamlit's [of
 
 ## Recover after a source update
 
+If `DataGrid.xlsx` from the 29 October CBS APD batch produces the database-header error, confirm the deployed branch includes the Excel dimension fix in `checker.py` and the updated `streamlit_app.py` and `web_checker.py`. That workbook reports a saved range of `A1:C1` even though it contains 37 columns. The fix reads the actual cells and excludes its verified totals footer, detecting 1,453 account records with `Old I.C.` as the key. Upload all four CBS APD CSVs again after updating the deployment. All 1,060 keys are found; email differences remain because the corresponding database Email cells are blank.
+
 The entrypoint refreshes an older in-memory checker and upload adapter before using the current comparison rules. This handles a Cloud process that reruns the updated app while retaining modules from the previous release. Normal reruns preserve the loaded modules and current results. A comparison-version check also refreshes releases that already supported Debtor ID but used older customer-name rules.
 
 If Cloud still reports `cannot import name 'is_datagrid_pl_viber_blast'`, verify the app uses this repository's `main` branch and `streamlit_app.py`, then select **Manage app → ⋮ → Reboot app** and confirm **Reboot**. This clears the process memory and reloads the repository source. See Streamlit's [reboot instructions](https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app/reboot-your-app).

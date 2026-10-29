@@ -125,6 +125,18 @@ The report for the supplied files is `reports/SBF_SALAD_VIBER_check_2026-10-26.x
 
 ## DataGrid email blasts
 
+For the four `29-10-26 CBS APD EMAIL BLAST` CSVs (BUCKET 4, BUCKET 7, BUCKET 8, and WRITEOFF), upload `DataGrid.xlsx` as the database and add all four CSVs. The checker uses `primary_key` to match `Old I.C.` and checks both identifier columns, email, customer name, account number, and campaign bucket on the same database record. `cc` and `bcc` remain unchecked. No FLOW_STAGE is needed.
+
+This DataGrid export has an incorrect saved worksheet range (`A1:C1`). The Excel reader uses the actual worksheet cells, including all 37 columns. Its final count-and-sums row is excluded only when its count equals the preceding account count, all other populated cells are supported financial totals, and each total equals its column's sum. Real account rows with blank keys still fail validation. The same reader is used by the web app, desktop app, and command line, without editing the source workbook.
+
+The supplied workbook contains 1,453 accounts. All 1,060 campaign keys are found: BUCKET 4 has 167 rows, BUCKET 7 has 65, BUCKET 8 has 486, and WRITEOFF has 342. Both identifiers, names, account numbers, and buckets match. DataGrid's Email cells are blank for all these accounts, so all 1,060 rows are reported as **DIFFERENT** for email. A complete database Email column is needed to validate the recipients. See `reports/CBS_APD_check_2026-10-29.xlsx` for source rows, database row references, field mappings, and differences.
+
+To run the same check from this folder:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_files.py --database "..\AUTOCHECKER\DataGrid.xlsx" --files "..\AUTOCHECKER\29-10-26 CBS APD EMAIL BLAST BUCKET 4 91-120.csv" "..\AUTOCHECKER\29-10-26 CBS APD EMAIL BLAST BUCKET 7 181-360.csv" "..\AUTOCHECKER\29-10-26 CBS APD EMAIL BLAST BUCKET 8 361+.csv" "..\AUTOCHECKER\29-10-26 CBS APD EMAIL BLAST WRITEOFF.csv" --file-key primary_key --database-key "Old I.C." --output "reports\CBS_APD_check_2026-10-29.xlsx"
+```
+
 To check `22-10-26 MSB PL EMAIL BLAST.csv`, add `DataGrid.xlsx` as the database, add the CSV as a file to check, and click **Check files**. No CHCODE or FLOW_STAGE columns need to be added.
 
 To check `22-10-26 CBS APD EMAIL BLAST BUCKET 4 91-120.csv`, add `DataGrid (1).xlsx` as the database and the CBS APD CSV as a file to check. Click **Check files**. The checker detects the CBS file's `primary_key` column as its CHCODE lookup and compares it with the database's `Old I.C.`.

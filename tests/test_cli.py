@@ -11,6 +11,7 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 
 from scripts.check_files import main
+from test_cbs_pl import cbs_pl_account_uploads
 from test_sbf_salad_viber import salad_viber_uploads
 from test_sbf_pl_viber import pl_viber_uploads
 from test_web_checker import hsbc_mobile_uploads
@@ -109,6 +110,23 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(results[0]["database_key"], "Old I.C.")
         self.assertEqual(results[0]["not_found"], 1)
         self.assertEqual(results[0]["verdict"], "ROW ISSUES")
+
+    def test_cbs_pl_recovery_and_write_off_check_without_blank_legacy_id(self):
+        database, files = cbs_pl_account_uploads()
+        self.database.write_bytes(database.data)
+        paths = []
+        for upload in files:
+            path = self.folder / upload.name
+            path.write_bytes(upload.data)
+            paths.append(path)
+        originals = {path: path.read_bytes() for path in [self.database, *paths]}
+        exit_code, results = self.run_cli(files=paths)
+        self.assertEqual(exit_code, 0)
+        for result in results:
+            self.assertEqual(result["verdict"], "MAPPED ROWS MATCH")
+            self.assertEqual((result["rows"], result["matched"], result["checked_fields"]), (2, 2, 5))
+            self.assertEqual(result["unchecked_fields"], ["cc", "bcc", "indexone_uid"])
+        self.assertTrue(all(path.read_bytes() == data for path, data in originals.items()))
 
     def test_generic_aliases_are_detected_without_file_key_and_preserved_in_report(self):
         aliases = ("Primary_Key", "INDEXONE_UID")

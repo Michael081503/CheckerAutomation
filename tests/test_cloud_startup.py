@@ -55,6 +55,8 @@ class CloudStartupTests(unittest.TestCase):
                 checker.COMPARISON_VERSION = 3
             if sys.argv[1] == "previous-excel-dimensions":
                 checker.COMPARISON_VERSION = 4
+            if sys.argv[1] == "previous-optional-identifiers":
+                checker.COMPARISON_VERSION = 5
             web_checker.AUTO_DETECTION_VERSION = 7
             if sys.argv[1] == "previous-comparison":
                 web_checker.AUTO_DETECTION_VERSION = 8
@@ -66,6 +68,8 @@ class CloudStartupTests(unittest.TestCase):
                 web_checker.AUTO_DETECTION_VERSION = 11
             if sys.argv[1] == "previous-excel-dimensions":
                 web_checker.AUTO_DETECTION_VERSION = 12
+            if sys.argv[1] == "previous-optional-identifiers":
+                web_checker.AUTO_DETECTION_VERSION = 13
             web_checker._key_column = outdated_detector
 
             with patch("streamlit.file_uploader", side_effect=uploader):
@@ -77,8 +81,8 @@ class CloudStartupTests(unittest.TestCase):
                 run = app.session_state["check_run"]
                 assert run.results[0].database_match_column == "Debtor ID"
                 assert run.results[0].count("MATCHED") == 1
-                assert web_checker.AUTO_DETECTION_VERSION == 13
-                assert checker.COMPARISON_VERSION == 5
+                assert web_checker.AUTO_DETECTION_VERSION == 14
+                assert checker.COMPARISON_VERSION == 6
                 assert callable(checker.is_salad_endo_pair)
 
                 # Healthy modules and the completed result survive normal reruns.
@@ -90,7 +94,7 @@ class CloudStartupTests(unittest.TestCase):
                 assert web_checker.prepare_uploaded_check is detect
                 assert app.session_state["check_run"] is run
         """)
-        for cached in ("engine-and-adapter", "adapter-only", "previous-comparison", "previous-endorsement", "previous-regular", "previous-hsbc-titles", "previous-excel-dimensions"):
+        for cached in ("engine-and-adapter", "adapter-only", "previous-comparison", "previous-endorsement", "previous-regular", "previous-hsbc-titles", "previous-excel-dimensions", "previous-optional-identifiers"):
             with self.subTest(cached=cached):
                 result = subprocess.run(
                     [sys.executable, "-c", script, cached], cwd=root,

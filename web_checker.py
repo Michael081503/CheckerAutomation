@@ -18,7 +18,7 @@ from checker import (
     find_header, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, match_column, normalize, phone_column, read_table, sheet_names,
 )
 
-AUTO_DETECTION_VERSION = 13
+AUTO_DETECTION_VERSION = 14
 
 
 @dataclass(frozen=True)

@@ -123,6 +123,37 @@ Both mapped fields must match one DataGrid row to receive **MATCHED**. A matchin
 
 The report for the supplied files is `reports/SBF_SALAD_VIBER_check_2026-10-26.xlsx`.
 
+## CBS PL recovery and write-off email blasts
+
+Upload `DataGrid(1).xlsx` as the database and add both `30-10-26 CBS PL EMAIL BLAST RECOVERY ACCOUNTS.csv` and `30-10-26 CBS PL EMAIL BLAST WRITE OFF ACCOUNTS.csv` as files to check. Click **Check files**. No column selections or FLOW_STAGE are needed; future exports with the same layout are detected from their headers.
+
+These files use `primary_key` to find `Old I.C.`. The checker compares five fields on that same database record:
+
+| File column | DataGrid column |
+| --- | --- |
+| `primary_key` | `Old I.C.` |
+| `email` | `Email` |
+| `accountnumber` | `Account No.` |
+| `chname` | `Name` |
+| `campaignbucket` | `Account Type` |
+
+The supplied `indexone_uid` column is blank in every row. Automatic DataGrid email checks treat an entirely blank secondary identifier as unused and show it as **NOT CHECKED**, with the reason in **Fields checked** and the report's mapping sheets. `cc` and `bcc` also remain unchecked. The selected lookup key is always required. If a secondary identifier has any populated value, every row in that column is compared, including blanks and incorrect values. Explicit field mappings continue checking the fields selected by the user. This rule does not apply to ordinary CHCODE layouts or full-copy checks.
+
+All 474 supplied campaign rows match the five checked fields. Their primary keys are unique across the two files and cover all 474 database accounts:
+
+| File | Rows | Matched | Differences | Missing keys |
+| --- | ---: | ---: | ---: | ---: |
+| RECOVERY ACCOUNTS | 81 | 81 | 0 | 0 |
+| WRITE OFF ACCOUNTS | 393 | 393 | 0 | 0 |
+
+The local report is `reports/CBS_PL_check_2026-10-30.xlsx`. Inputs and generated reports stay outside Git; the repository includes synthetic regression examples.
+
+To run the same check from this folder:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_files.py --database "..\AUTOCHECKER\DataGrid(1).xlsx" --files "..\AUTOCHECKER\30-10-26 CBS PL EMAIL BLAST RECOVERY ACCOUNTS.csv" "..\AUTOCHECKER\30-10-26 CBS PL EMAIL BLAST WRITE OFF ACCOUNTS.csv" --output "reports\CBS_PL_check_2026-10-30.xlsx"
+```
+
 ## DataGrid email blasts
 
 For the four `29-10-26 CBS APD EMAIL BLAST` CSVs (BUCKET 4, BUCKET 7, BUCKET 8, and WRITEOFF), upload `DataGrid.xlsx` as the database and add all four CSVs. The checker uses `primary_key` to match `Old I.C.` and checks both identifier columns, email, customer name, account number, and campaign bucket on the same database record. `cc` and `bcc` remain unchecked. No FLOW_STAGE is needed.
@@ -155,7 +186,7 @@ The checker recognizes a database with `Name`, `Old I.C.`, `Account No.`, and `E
 | `financingnumber` | `Financing/Card No.` | Text, when both columns exist |
 | `campaignbucket` | `Account Type` | Text, when both columns exist |
 
-Both identifier columns are checked when present, including an `indexone_uid` that differs from the selected `primary_key`. Leading zeros in text identifiers and account numbers are preserved. Fields without a supported database counterpart, such as `cc` and `bcc`, remain **NOT CHECKED**.
+Both identifier columns are checked when populated, including an `indexone_uid` that differs from the selected `primary_key`. An entirely blank secondary identifier is disclosed as **NOT CHECKED** in automatic DataGrid email checks; partially populated columns and explicit mappings are still compared. Leading zeros in text identifiers and account numbers are preserved. Fields without a supported database counterpart, such as `cc` and `bcc`, remain **NOT CHECKED**.
 
 For `23-10-26 SBF PL EMAIL BLAST.csv`, upload the corresponding `DataGrid.xlsx` database. The app detects `primary_key` as CHCODE and compares six fields when the database contains `Financing/Card No.`: both identifiers, email, name, account number, and financing number.
 

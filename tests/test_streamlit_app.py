@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
+from test_cbs_pl import cbs_pl_account_uploads
 from test_sbf_pl_viber import BLAST_HEADERS as PL_HEADERS, pl_database, pl_row
 from test_salad_endo import endo_blast, endo_database, regular_database
 
@@ -64,6 +65,18 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertTrue(self.app.button(key="run_check").disabled)
         self.assertTrue(any("Add a database and your files" in caption.value for caption in self.app.caption))
         self.assertEqual(len(self.app.get("download_button")), 0)
+
+    def test_cbs_pl_buckets_pass_and_disclose_unused_legacy_identifier(self):
+        database, files = cbs_pl_account_uploads()
+        self.database = BrowserFile(database)
+        self.files = [BrowserFile(upload) for upload in files]
+        self.run_check()
+        run = self.app.session_state["check_run"]
+        self.assertTrue(all(result.count("MATCHED") == 2 and len(result.mappings) == 5 for result in run.results))
+        self.assertTrue(all(result.source.column == "primary_key" for result in run.results))
+        self.assertTrue(any("indexone_uid: Optional identifier is blank in every row" in caption.value
+                            for caption in self.app.caption))
+        self.assertEqual(len(self.app.get("download_button")), 1)
 
     def test_upload_check_preview_and_report(self):
         self.run_check()

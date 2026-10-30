@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 5
+COMPARISON_VERSION = 6
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -75,6 +75,7 @@ class FileResult:
     comparison_mode: str = "Full database copy"
     mappings: list[ColumnMapping] = field(default_factory=list)
     ignored_columns: list[str] = field(default_factory=list)
+    unchecked_reasons: dict[str, str] = field(default_factory=dict)
     flow_stage_required: bool = False
     flow_stage_column: str = ""
     flow_stage: str = ""
@@ -614,6 +615,18 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
         mappings = list(source.mappings)
     elif source.has_headers:
         mappings = suggest_mappings(target.headers, table.headers, source.column, database.column)
+        if is_datagrid_pair(target.headers, table.headers, source.column, database.column):
+            # Some email exports leave their unused legacy identifier empty.
+            # Only automatic mappings may omit an entirely blank secondary ID;
+            # the lookup key and partially populated identifiers remain checked.
+            for item in mappings:
+                if item.file_column != source.column and item.file_column.casefold() in CHCODE_ALIASES[1:]:
+                    position = target.headers.index(item.file_column)
+                    if target.rows and all(values[position] is None or not str(values[position]).strip()
+                                           for _, values in target.rows):
+                        result.unchecked_reasons[item.file_column] = (
+                            f"Optional identifier is blank in every row; {source.column} identifies the {database.column} record")
+            mappings = [item for item in mappings if item.file_column not in result.unchecked_reasons]
     else:
         mappings = [ColumnMapping(source.column, database.column)]
     if result.flow_stage_required:
@@ -980,7 +993,7 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                 if header == result.flow_stage_column:
                     append(mapping_sheet, [header, "", "", "FILE IDENTIFIER", "Labels the file; row data is compared against database records by CHCODE"])
                 elif item is None:
-                    rule = "No database mapping selected"
+                    rule = result.unchecked_reasons.get(header, "No database mapping selected")
                     if is_salad_endo_pair(result.headers, result.database_headers,
                                           result.source.column, result.database_match_column):
                         if header.casefold() == "agentcode":

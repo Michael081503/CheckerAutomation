@@ -13,14 +13,14 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 5)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 6)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 13:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 14:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
@@ -146,6 +146,8 @@ def render_file_details(result, run, index):
             st.caption("Only CHCODE in column B is checked for headerless files. Other columns are not checked.")
         else:
             st.caption("Results cover the compared fields. Unmapped campaign fields are not checked.")
+            for header, reason in result.unchecked_reasons.items():
+                st.caption(f"{header}: {reason}.")
             if any(is_customer_name_column(item.file_column) or is_customer_name_column(item.database_column)
                    for item in result.mappings):
                 st.caption("Question marks are ignored when comparing customer names. Original names are kept in the report.")

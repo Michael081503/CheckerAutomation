@@ -17,8 +17,9 @@ from checker import (
     CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, check_files, chcode_columns, export_report,
     find_header, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, match_column, normalize, phone_column, read_table, sheet_names,
 )
+from auto_match import database_key_candidates, has_identifier_header, infer_layout, is_assignment_template
 
-AUTO_DETECTION_VERSION = 14
+AUTO_DETECTION_VERSION = 15
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,8 @@ class UploadedSource:
     mappings: tuple[ColumnMapping, ...] | None = None
     has_headers: bool = True
     detection_error: str = ""
+    database_column: str = ""
+    allow_unnamed_headers: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,8 @@ class PreparedUpload:
     inspection: Inspection | None = None
     error: str = ""
     note: str = ""
+    inferred: bool = False
+    mapping_evidence: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -198,8 +203,12 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                 try:
                     table = read_table(database_path, sheet)
                     column = match_column(table.headers)
+                    inferred_database = not bool(column)
+                    if not column:
+                        generic_keys = database_key_candidates(table)
+                        column = generic_keys[0] if generic_keys else ""
                     if column:
-                        candidates.append((table, column))
+                        candidates.append((table, column, inferred_database))
                 except ValueError as error:
                     database_errors.append(str(error))
             if not candidates:
@@ -207,7 +216,7 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                                  "The database must have a CHCODE header (CHCODE, primary_key, or indexone_uid), supported DataGrid headers, or the SBF SALAD / PL endorsement columns: caseNo, caseAccountNo, caseCustomerName, caseCustomerEmail, and Collector.")
             if len(candidates) > 1:
                 raise ValueError("Multiple database worksheets have supported headers. Upload a workbook with one database worksheet.")
-            table, database_column = candidates[0]
+            table, database_column, inferred_database = candidates[0]
             key_position = table.headers.index(database_column)
             database_keys = {normalize(values[key_position], Options()) for _, values in table.rows}
             if not database_keys or database_keys == {""}:
@@ -229,25 +238,44 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                 errors = []
                 for sheet in names:
                     try:
-                        target, has_headers = _detect_file_table(path, sheet, table, database_keys)
-                        candidates.append((target, has_headers))
+                        try:
+                            probe = read_table(path, sheet, headers_only=True)
+                        except ValueError:
+                            probe = read_table(path, sheet, headers_only=True, allow_unnamed_headers=True)
+                        infer = (is_assignment_template(probe.headers) or inferred_database
+                                 or (not match_column(probe.headers, table.headers)
+                                     and has_identifier_header(probe.headers)))
+                        if infer:
+                            target = read_table(path, sheet, allow_unnamed_headers=True)
+                            layout = infer_layout(target, table)
+                            candidates.append((target, True, layout))
+                        else:
+                            target, has_headers = _detect_file_table(path, sheet, table, database_keys)
+                            candidates.append((target, has_headers, None))
                     except ValueError as error:
                         errors.append(str(error))
                 if not candidates:
                     raise ValueError(errors[0] if errors else "No file data was found.")
                 if len(candidates) > 1:
                     raise ValueError("Multiple worksheets contain file data. Upload a workbook with one data worksheet.")
-                target, has_headers = candidates[0]
-                column, note = _key_column(target, database_keys, table.headers) if has_headers else (
-                    "CHCODE", "No headers detected; column B is CHCODE and row 1 is included")
+                target, has_headers, layout = candidates[0]
+                column, note = ((layout.file_key, layout.note) if layout else
+                                _key_column(target, database_keys, table.headers) if has_headers else (
+                                    "CHCODE", "No headers detected; column B is CHCODE and row 1 is included"))
                 if (has_headers and phone_column(target.headers)
+                        and layout is None
                         and not is_datagrid_viber_blast(target.headers) and not is_datagrid_pl_viber_blast(target.headers)
                         and not find_header(target.headers, "FLOW_STAGE")):
                     note += "; no FLOW_STAGE detected; phone numbers are compared for the same CHCODE"
                 info = Inspection(names, target.sheet, tuple(target.headers), column,
                                   target.header_row, has_headers)
-                source = UploadedSource(upload, target.sheet, column, has_headers=has_headers)
-                prepared.append(PreparedUpload(source, info, note=note))
+                source = UploadedSource(upload, target.sheet, column,
+                                        mappings=layout.mappings if layout else None,
+                                        has_headers=has_headers,
+                                        database_column=layout.database_key if layout else "",
+                                        allow_unnamed_headers=layout is not None)
+                prepared.append(PreparedUpload(source, info, note=note, inferred=layout is not None,
+                                               mapping_evidence=layout.evidence if layout else ()))
             except Exception as error:
                 message = str(error)
                 source = UploadedSource(upload, "", "CHCODE", detection_error=message)
@@ -268,7 +296,9 @@ def configuration_signature(database: UploadedSource, files: list[UploadedSource
     def describe(source):
         return {"upload": source.upload.fingerprint, "sheet": source.sheet, "column": source.column,
                 "mappings": None if source.mappings is None else [asdict(item) for item in source.mappings],
-                "has_headers": source.has_headers, "detection_error": source.detection_error}
+                "has_headers": source.has_headers, "detection_error": source.detection_error,
+                "database_column": source.database_column,
+                "allow_unnamed_headers": source.allow_unnamed_headers}
     configuration = {"database": describe(database), "files": [describe(source) for source in files], "options": asdict(options)}
     return hashlib.sha256(json.dumps(configuration, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -282,7 +312,8 @@ def run_uploaded_check(database: UploadedSource, files: list[UploadedSource], op
         database_source = Source(_write_upload(root / "database", database.upload), database.sheet, database.column,
                                  has_headers=database.has_headers)
         sources = [Source(_write_upload(root / "files" / str(index), source.upload), source.sheet, source.column,
-                          source.mappings, source.has_headers, source.detection_error)
+                          source.mappings, source.has_headers, source.detection_error,
+                          source.database_column, source.allow_unnamed_headers)
                    for index, source in enumerate(files)]
         results = check_files(database_source, sources, options, progress)
         # The download describes client filenames, and remains valid after the

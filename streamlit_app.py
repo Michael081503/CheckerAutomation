@@ -13,14 +13,14 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 6)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 7)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 14:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 15:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
@@ -154,7 +154,11 @@ def render_file_details(result, run, index):
                 st.caption("The replacement character (�) matches Ñ/ñ at the same position in a customer name; other letters must match.")
             if is_hsbc_mobile_pair(result.headers, result.database_headers, result.source.column, result.database_match_column):
                 st.caption("Leading Mr./Ms., Mr. and Ms. titles are ignored in last names. The surname and suffixes are still checked; original values stay in the report.")
-            if is_salad_endo_pair(result.headers, result.database_headers, result.source.column, result.database_match_column):
+            if result.source.database_column:
+                st.caption(f"All mapped fields are compared on the same database record using {result.source.column} → {result.database_match_column}.")
+                if any(item.comparison == "Phone" for item in result.mappings):
+                    st.caption("Phone values are checked against the detected database column, which may have an unexpected header. Review the field mappings below.")
+            elif is_salad_endo_pair(result.headers, result.database_headers, result.source.column, result.database_match_column):
                 st.caption("Account number, customer name and email are checked on the same SBF endorsement record (SALAD / PL). Agentcode and Collector staff assignments are not compared.")
             elif is_datagrid_pl_viber_blast(result.headers) and result.source.column.casefold() == "debtorid":
                 st.caption("Debtorid is matched to DataGrid Debtor ID; FullName and Phone must match Name and Last Called No. on the same database row. Staff and campaign fields are not checked.")
@@ -230,7 +234,7 @@ def main():
     prepared = None
     if database_upload:
         if "preparation" not in st.session_state:
-            with st.spinner("Detecting worksheets, headers, and CHCODE columns..."):
+            with st.spinner("Detecting worksheets, headers, and lookup columns..."):
                 st.session_state.preparation = prepare_uploaded_check(database_upload, file_uploads)
         prepared = st.session_state.preparation
 
@@ -252,7 +256,10 @@ def main():
                 "Header row": (str(info.header_row) if info and item.source.has_headers
                                else "No headers" if info else ""),
                 "Lookup column": item.source.column if info else "",
-                "Check": ("Account number, name and email" if info and prepared.database_info
+                "Database lookup column": (item.source.database_column or prepared.database.column
+                                           if info and prepared.database else ""),
+                "Check": ("Detected field mappings" if item.inferred
+                          else "Account number, name and email" if info and prepared.database_info
                           and is_salad_endo_pair(info.headers, prepared.database_info.headers, item.source.column, prepared.database.column)
                           else "Viber debtor ID, phone and name" if info and is_datagrid_pl_viber_blast(info.headers)
                           else "Viber phone and name" if info and is_datagrid_viber_blast(info.headers)
@@ -265,6 +272,10 @@ def main():
         for item in prepared.files:
             if item.note and not item.error:
                 st.caption(f"{item.source.upload.name}: {item.note}")
+            if item.mapping_evidence:
+                with st.expander(f"Detected field mappings: {item.source.upload.name}"):
+                    st.caption("These mappings use headers and matching values from the uploaded database. Results cover the mapped fields; other columns are not checked.")
+                    st.dataframe(list(item.mapping_evidence), hide_index=True, width="stretch")
         file_errors = sum(bool(item.error) for item in prepared.files)
         if file_errors:
             st.warning(f"{file_errors} file(s) need attention. Details are shown above and included in the report.")
@@ -278,7 +289,9 @@ def main():
     elif prepared and not prepared.database_error and not prepared.files:
         st.caption("Add at least one file to check.")
     st.caption("CHCODE can be in CHCODE, primary_key, or indexone_uid. The lookup column is detected automatically. Headerless files use column B and include row 1; only CHCODE is checked.")
-    st.caption("Files without FLOW_STAGE use CHCODE to compare phone numbers with the matching database record.")
+    st.caption("Recognized CHCODE files without FLOW_STAGE compare phone numbers with the matching database record.")
+    st.caption("For PARKED and LEGACY, add the workbook without TEMPLATE as the database and its TEMPLATE file under files to check.")
+    st.caption("New layouts are matched using headers and values. Review detected field mappings; uncertain layouts are reported for review.")
     st.caption("SALAD Viber blasts use Phone and FullName to check the same DataGrid row.")
     st.caption("PL Viber blasts use Debtorid to check FullName and Phone against the same DataGrid record.")
     st.caption("SALAD and PL NEW ENDO email blasts use accountnumber to check the name and email against caseAccountNo in the endorsement workbook.")

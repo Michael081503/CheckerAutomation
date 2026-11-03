@@ -19,7 +19,14 @@ def main():
     parser.add_argument("--database-key", help="Database lookup-column header; defaults to automatic detection")
     parser.add_argument("--file-key", help="Lookup-column header to use in every file; defaults to automatic detection")
     parser.add_argument("--full-copy", action="store_true", help="Require every database row and every column")
+    parser.add_argument("--auto", action="store_true",
+                        help="Use the browser app's automatic worksheet, lookup and field matching")
     arguments = parser.parse_args()
+    if arguments.auto and (arguments.full_copy or arguments.database_sheet is not None
+                           or arguments.database_key is not None or arguments.file_key is not None):
+        parser.error("--auto cannot be combined with --full-copy, --database-sheet, --database-key, or --file-key.")
+    if any(arguments.output.resolve() == path.resolve() for path in [arguments.database, *arguments.files]):
+        parser.error("The output must differ from every input file.")
     for name in ("database_key", "file_key"):
         value = getattr(arguments, name)
         if value is not None and not value.strip():
@@ -32,21 +39,36 @@ def main():
         column = (find_header(table.headers, key) or key.strip()) if key is not None else (match_column(table.headers, database_headers) or "CHCODE")
         return Source(path, table.sheet, column)
 
-    database = source(arguments.database, arguments.database_sheet, arguments.database_key)
-    database_headers = read_table(database.path, database.sheet, headers_only=True).headers
-    files = []
-    for path in arguments.files:
+    if arguments.auto:
+        from web_checker import Upload, prepare_uploaded_check, run_prepared_check
+
         try:
-            files.append(source(path, key=arguments.file_key, database_headers=database_headers))
-        except Exception:
-            # Let the checker report one bad file while continuing the others.
-            files.append(Source(path, "", arguments.file_key.strip() if arguments.file_key is not None else "CHCODE"))
-    if any(arguments.output.resolve() == item.path.resolve() for item in [database, *files]):
-        parser.error("The output must differ from every input file.")
-    options = Options(mapped_fields=not arguments.full_copy, require_flow_stage=True)
-    results = check_files(database, files, options)
-    arguments.output.parent.mkdir(parents=True, exist_ok=True)
-    export_report(arguments.output, database, options, results)
+            prepared = prepare_uploaded_check(
+                Upload(arguments.database.name, arguments.database.read_bytes()),
+                [Upload(path.name, path.read_bytes()) for path in arguments.files],
+            )
+            if prepared.database_error:
+                parser.error(f"Database: {prepared.database_error}")
+            run = run_prepared_check(prepared)
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
+        database, results = run.database, run.results
+        arguments.output.parent.mkdir(parents=True, exist_ok=True)
+        arguments.output.write_bytes(run.report)
+    else:
+        database = source(arguments.database, arguments.database_sheet, arguments.database_key)
+        database_headers = read_table(database.path, database.sheet, headers_only=True).headers
+        files = []
+        for path in arguments.files:
+            try:
+                files.append(source(path, key=arguments.file_key, database_headers=database_headers))
+            except Exception:
+                # Let the checker report one bad file while continuing the others.
+                files.append(Source(path, "", arguments.file_key.strip() if arguments.file_key is not None else "CHCODE"))
+        options = Options(mapped_fields=not arguments.full_copy, require_flow_stage=True)
+        results = check_files(database, files, options)
+        arguments.output.parent.mkdir(parents=True, exist_ok=True)
+        export_report(arguments.output, database, options, results)
     for result in results:
         print(json.dumps({"file": result.source.path.name, "identifier": result.file_identifier,
                           "file_key": result.source.column, "database_key": result.database_match_column or database.column,

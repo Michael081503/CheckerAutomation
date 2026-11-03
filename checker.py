@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 6
+COMPARISON_VERSION = 7
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -49,6 +49,8 @@ class Source:
     mappings: tuple[ColumnMapping, ...] | None = None
     has_headers: bool = True
     detection_error: str = ""
+    database_column: str = ""
+    allow_unnamed_headers: bool = False
 
 
 @dataclass(frozen=True)
@@ -333,7 +335,7 @@ def _is_datagrid_total(headers: list[str], records: list[tuple[int, tuple]]) -> 
 
 
 def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
-           headers_only: bool = False) -> Table:
+           headers_only: bool = False, allow_unnamed_headers: bool = False) -> Table:
     iterator = iter(rows)
     first = next(iterator, None)
     if first is None:
@@ -371,8 +373,23 @@ def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
             iterator = iter(preamble)
     # Keep internal empty headers so column positions never shift.
     headers = [str(value).strip() if value is not None else "" for value in first]
+    declared_width = len(headers)
     while headers and not headers[-1]:
         headers.pop()
+    if allow_unnamed_headers and headers:
+        # Infer only visible column labels, never values or column positions.
+        # Buffering also gives headers-only inspection the same actual width as
+        # the eventual check when trailing unnamed columns contain data.
+        buffered = [tuple(values) for values in iterator]
+        width = max(len(headers), declared_width)
+        for values in buffered:
+            width = max(width, next((index + 1 for index in range(len(values) - 1, -1, -1)
+                                     if values[index] is not None and str(values[index]).strip()), 0))
+        headers.extend([""] * (width - len(headers)))
+        from openpyxl.utils import get_column_letter
+        headers = [name or f"Unnamed column {get_column_letter(index + 1)}"
+                   for index, name in enumerate(headers)]
+        iterator = iter(buffered)
     if not headers or any(not header for header in headers):
         raise ValueError(f"{path.name}: header row {header_row} must contain a name for every data column.")
     # Real database exports repeat names. Preserve every position and give later
@@ -401,7 +418,7 @@ def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
 
 
 def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = False,
-               has_headers: bool = True) -> Table:
+               has_headers: bool = True, allow_unnamed_headers: bool = False) -> Table:
     path = Path(path)
     _validate(path)
     if path.suffix.lower() == ".csv":
@@ -420,12 +437,18 @@ def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = Fal
             # the delimiter using a supported header, including later rows.
             candidates = [delimiter, *(value for value in ",;\t|" if value != delimiter)]
             for candidate in candidates:
-                probe = csv.reader(io.StringIO(contents, newline=""), dialect, delimiter=candidate)
+                probe = csv.reader(io.StringIO(contents, newline=""), dialect, delimiter=candidate,
+                                   quotechar='"', doublequote=True)
                 if any(_has_supported_header(values) for values in probe):
                     delimiter = candidate
                     break
-        reader = csv.reader(io.StringIO(contents, newline=""), dialect, delimiter=delimiter)
-        return _table(path, "CSV", reader, has_headers=has_headers, headers_only=headers_only)
+        # Sniffer can mistake apostrophes inside customer names for quoting and
+        # merge hundreds of rows. These exports use standard CSV double quotes;
+        # sniff the separator while keeping apostrophes as ordinary text.
+        reader = csv.reader(io.StringIO(contents, newline=""), dialect, delimiter=delimiter,
+                            quotechar='"', doublequote=True)
+        return _table(path, "CSV", reader, has_headers=has_headers, headers_only=headers_only,
+                      allow_unnamed_headers=allow_unnamed_headers)
     book = load_workbook(path, read_only=True, data_only=True)
     try:
         selected = sheet or book.sheetnames[0]
@@ -437,7 +460,8 @@ def read_table(path: Path, sheet: str | None = None, *, headers_only: bool = Fal
         # Read the actual cells so stale dimensions cannot truncate validation.
         worksheet.reset_dimensions()
         reader = worksheet.iter_rows(values_only=True)
-        return _table(path, selected, reader, has_headers=has_headers, headers_only=headers_only)
+        return _table(path, selected, reader, has_headers=has_headers, headers_only=headers_only,
+                      allow_unnamed_headers=allow_unnamed_headers)
     finally:
         book.close()
 
@@ -649,7 +673,8 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
         raise ValueError("The selected file has column headers but no data rows to validate.")
     positions = [(target.headers.index(item.file_column), table.headers.index(item.database_column), item) for item in mappings]
     customer_name_fields = {item.file_column for item in mappings
-                            if is_customer_name_column(item.file_column) or is_customer_name_column(item.database_column)}
+                            if is_customer_name_column(item.database_column)
+                            or (not source.database_column and is_customer_name_column(item.file_column))}
     last_name_fields = ({item.file_column for item in mappings if item.comparison == "Text"
                          and re.sub(r"[^a-z0-9]", "", item.database_column.casefold()) == "lastname"
                          and item.file_column != source.column}
@@ -731,7 +756,8 @@ def check_files(database: Source, files: list[Source], options: Options,
                 cancelled: Callable[[], bool] = lambda: False) -> list[FileResult]:
     if not database.has_headers:
         raise ValueError("The database must have a header row containing CHCODE or the supported DataGrid fields.")
-    table = read_table(database.path, database.sheet)
+    table = read_table(database.path, database.sheet,
+                       allow_unnamed_headers=database.allow_unnamed_headers)
     if database.column not in table.headers:
         raise ValueError(f"Database column '{database.column}' no longer exists.")
     comparison_headers = [name for name in table.headers if not (options.require_flow_stage and name.casefold() == "flow_stage")]
@@ -762,6 +788,7 @@ def check_files(database: Source, files: list[Source], options: Options,
     results = []
     viber_lookup = None
     pl_viber_lookup = None
+    inferred_lookups = {}
     for index, source in enumerate(files, 1):
         if cancelled():
             raise Cancelled()
@@ -774,16 +801,48 @@ def check_files(database: Source, files: list[Source], options: Options,
                 raise ValueError(source.detection_error)
             if not source.has_headers and not options.mapped_fields:
                 raise ValueError("Headerless files support uploaded-row checks only. Choose Validate uploaded rows.")
-            target = read_table(source.path, source.sheet, has_headers=source.has_headers)
+            target = read_table(source.path, source.sheet, has_headers=source.has_headers,
+                                allow_unnamed_headers=source.allow_unnamed_headers)
             result.headers = target.headers
             if source.column not in target.headers:
                 raise ValueError(f"Match column '{source.column}' no longer exists.")
             comparison_database, comparison_lookup = database, lookup
-            if (options.mapped_fields and source.has_headers and is_salad_endo_database(table.headers)
+            if source.database_column:
+                if not options.mapped_fields:
+                    raise ValueError("Per-file database lookup columns support uploaded-row checks only.")
+                if source.database_column not in table.headers:
+                    raise ValueError(f"Database column '{source.database_column}' no longer exists.")
+                mappings = (list(source.mappings) if source.mappings is not None else
+                            suggest_mappings(target.headers, table.headers, source.column, source.database_column))
+                key_mappings = [item for item in mappings if item.file_column == source.column]
+                if len(key_mappings) != 1 or key_mappings[0].database_column != source.database_column:
+                    raise ValueError(f"The {source.column}-to-{source.database_column} mapping is required.")
+                key_mapping = key_mappings[0]
+                if key_mapping.comparison not in {"Text", "Number", "Product", "Phone"}:
+                    raise ValueError(f"Unknown comparison type: {key_mapping.comparison}")
+                comparison_database = replace(database, column=source.database_column)
+                result.database_match_column = source.database_column
+                cache_key = (source.database_column, key_mapping.comparison)
+                if cache_key not in inferred_lookups:
+                    candidate_lookup = {}
+                    key_position = table.headers.index(source.database_column)
+                    for number, values in table.rows:
+                        if cancelled():
+                            raise Cancelled()
+                        key = compare_value(values[key_position], key_mapping.comparison, options,
+                                            customer_name=is_customer_name_column(source.database_column))
+                        if not key:
+                            raise ValueError(f"The database {source.database_column} column has a blank value at row {number}.")
+                        candidate_lookup.setdefault(key, []).append(number)
+                    if not candidate_lookup:
+                        raise ValueError(f"The database {source.database_column} column has no nonblank values.")
+                    inferred_lookups[cache_key] = candidate_lookup
+                comparison_lookup = inferred_lookups[cache_key]
+            if (options.mapped_fields and not source.database_column and source.has_headers and is_salad_endo_database(table.headers)
                     and not _has_chcode(table.headers) and not _has_chcode(target.headers)
                     and not is_salad_endo_pair(target.headers, table.headers, source.column, database.column)):
                 raise ValueError("SBF endorsement email checks require accountnumber, chname, and email, using accountnumber to match caseAccountNo.")
-            if (options.mapped_fields and is_datagrid_pl_viber_blast(target.headers)
+            if (options.mapped_fields and not source.database_column and is_datagrid_pl_viber_blast(target.headers)
                     and source.column.casefold() == "debtorid"):
                 if not is_datagrid_pl_viber_pair(target.headers, table.headers, source.column, database.column):
                     raise ValueError("PL Viber checks require a DataGrid database with Name, Old I.C., Account No., Email, Last Called No., and Debtor ID columns, using Old I.C. or Debtor ID as its database key.")
@@ -802,7 +861,7 @@ def check_files(database: Source, files: list[Source], options: Options,
                         candidate_lookup.setdefault(debtor, []).append(number)
                     pl_viber_lookup = candidate_lookup
                 comparison_lookup = pl_viber_lookup
-            if (options.mapped_fields and is_datagrid_viber_blast(target.headers)
+            if (options.mapped_fields and not source.database_column and is_datagrid_viber_blast(target.headers)
                     and source.column.casefold() == "phone"):
                 if not is_datagrid_viber_pair(target.headers, table.headers, source.column, database.column):
                     raise ValueError("SALAD Viber checks require a DataGrid database with Name, Old I.C., Account No., Email, and Last Called No. columns, using Old I.C. or Last Called No. as its database key.")
@@ -823,7 +882,10 @@ def check_files(database: Source, files: list[Source], options: Options,
                 comparison_lookup = viber_lookup
             if (options.mapped_fields and options.allow_missing_flow_stage and source.has_headers
                     and not find_header(target.headers, "FLOW_STAGE") and phone_column(target.headers)
-                    and not phone_column(table.headers)):
+                    and not phone_column(table.headers)
+                    and not (source.database_column and source.mappings is not None
+                             and any(item.file_column == phone_column(target.headers)
+                                     for item in source.mappings))):
                 raise ValueError("The file has no FLOW_STAGE and contains phone numbers, but the database has no supported phone column.")
             if (options.mapped_fields and result.flow_stage_required
                     and not find_header(target.headers, "FLOW_STAGE")
@@ -991,7 +1053,9 @@ def export_report(path: Path, database: Source, options: Options, results: list[
             for header in result.headers:
                 item = mapped.get(header)
                 if header == result.flow_stage_column:
-                    append(mapping_sheet, [header, "", "", "FILE IDENTIFIER", "Labels the file; row data is compared against database records by CHCODE"])
+                    lookup_column = result.database_match_column or database.column
+                    append(mapping_sheet, [header, "", "", "FILE IDENTIFIER",
+                                           f"Labels the file; row data is compared against database records by {lookup_column}"])
                 elif item is None:
                     rule = result.unchecked_reasons.get(header, "No database mapping selected")
                     if is_salad_endo_pair(result.headers, result.database_headers,
@@ -1020,8 +1084,20 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                             rule = "Matches the phone number for the same Debtor ID; a nonblank phone is required. Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison"
                         else:
                             rule = "Compares the value on the same database row as Debtor ID; uses case and space options"
-                    if item.comparison == "Text" and (is_customer_name_column(item.file_column)
-                                                      or is_customer_name_column(item.database_column)):
+                    if result.source.database_column:
+                        lookup_column = result.database_match_column
+                        comparison_rule = {
+                            "Text": "Uses case and space options",
+                            "Number": "Numeric equality; commas ignored",
+                            "Product": "Credit Card = CARDS; Personal Loan = LOAN",
+                            "Phone": "A nonblank phone is required; Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison",
+                        }[item.comparison]
+                        rule = (f"Finds database rows by {item.file_column} = {lookup_column}; all mapped fields must match the same row; "
+                                if item.file_column == result.source.column else
+                                f"Compares the value on the same {lookup_column} database record; ") + comparison_rule
+                    if item.comparison == "Text" and (is_customer_name_column(item.database_column)
+                                                      or (not result.source.database_column
+                                                          and is_customer_name_column(item.file_column))):
                         rule += "; question marks are ignored in customer names"
                         rule += "; replacement character U+FFFD matches only a corresponding Ñ/ñ; other letters must match"
                     if (item.comparison == "Text" and item.file_column != result.source.column

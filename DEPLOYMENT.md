@@ -10,6 +10,7 @@ Keep this layout at the root of the repository:
 streamlit_app.py
 web_checker.py
 checker.py
+auto_match.py
 requirements.txt
 .gitignore
 README.md
@@ -18,13 +19,48 @@ DEPLOYMENT.md
     config.toml
 ```
 
-`artifacts/streamlit-cloud-ready.zip`, if provided, contains this clean source layout. Extract it before adding the files to GitHub; Streamlit deploys from the repository, not directly from the ZIP. Local desktop files and tests are optional for deployment.
+Every deployment bundle, including `artifacts/streamlit-cloud-ready.zip` if provided, must contain `auto_match.py` alongside the other Python files above. `web_checker.py` imports it at startup. Extract a ZIP before adding its files to GitHub; Streamlit deploys from the repository, not directly from the ZIP. Local desktop files and tests are optional for deployment.
+
+| File | Purpose |
+| --- | --- |
+| `streamlit_app.py` | Browser upload workflow, detected field evidence, results, and report download |
+| `web_checker.py` | Session upload adapter and automatic worksheet/layout preparation |
+| `checker.py` | Excel/CSV reading, same-record comparison, and Excel report generation |
+| `auto_match.py` | PARKED/LEGACY assignment mappings and conservative inference for unfamiliar exports |
+| `requirements.txt` | Pinned Streamlit and openpyxl dependencies |
+| `.streamlit/config.toml` | Theme and per-file upload limit |
 
 Upload actual database and campaign files through the app. They are not required in GitHub. The `.gitignore` excludes Excel and CSV data, generated reports, temporary upload folders, and `.streamlit/secrets.toml`.
 
+## PARKED, LEGACY, and new layouts
+
+Upload `PARKED.xlsx` as the database with `PARKED TEMPLATE.csv` as the file to check. After downloading that result, use **Start over** and upload `LEGACY.xlsx` with `LEGACY TEMPLATE.csv`. Local sample inspection counted 2,324 PARKED template rows and 1,470 LEGACY template rows, excluding headers.
+
+These templates check four fields on one debtor record. PARKED's unnamed column K is displayed as `Unnamed column K`; LEGACY's named `Debtor` column serves the same purpose:
+
+| Template column | Database column |
+| --- | --- |
+| `Unnamed column K` (PARKED) or `Debtor` (LEGACY) | `Debtor ID` lookup |
+| `FullName` | `Name` |
+| `LastName` | `Account No.` |
+| `Phone` | `Email`, compared as a phone number |
+
+The database's `Email` field contains phone numbers in these supplied layouts, and the template's `LastName` contains account numbers. Keep these established mappings even when all uploaded values differ; the checker reports those differences on the debtor's own record. `FirstName`, `CHCode`, `OB`, `Monthly`, `Terms`, `Promo`, and `Level` remain **NOT CHECKED**, including staff assignments and blank campaign fields. Original values and column positions are preserved, and missing `FLOW_STAGE` uses the filename.
+
+For unfamiliar uploads, automatic inference requires a complete, unique database identifier and compatible identifier/value evidence. Additional field proposals use headers and evidence from the same identified records. Names alone and blank or repeated campaign values are insufficient. Unknown or ambiguous layouts need attention, and unsupported fields remain **NOT CHECKED**. Recognized profiles retain their mappings when values are wrong; the selected lookup stays fixed for the whole file.
+
+For local command-line checks with the same browser behavior, run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database "..\AUTOCHECKER\PARKED.xlsx" --files "..\AUTOCHECKER\PARKED TEMPLATE.csv" --output "reports/PARKED_check_2026-11-03.xlsx"
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database "..\AUTOCHECKER\LEGACY.xlsx" --files "..\AUTOCHECKER\LEGACY TEMPLATE.csv" --output "reports/LEGACY_check_2026-11-03.xlsx"
+```
+
+`--auto` cannot be combined with `--full-copy`, `--database-sheet`, `--database-key`, or `--file-key`. See [automatic matching in the README](README.md#new-file-and-database-layouts) for coverage and limitations.
+
 ## Deploy
 
-1. Create a GitHub repository and add the source files above. Include `.streamlit/config.toml` so the dark theme and upload setting are applied.
+1. Create a GitHub repository and add the source files above, including `streamlit_app.py`, `web_checker.py`, `checker.py`, and `auto_match.py`. Include `.streamlit/config.toml` so the dark theme and upload setting are applied.
 2. Open [Streamlit Community Cloud](https://share.streamlit.io/) and select **Create app**.
 3. Select your repository and its branch, normally `main`.
 4. Set **Main file path** to **`streamlit_app.py`**.
@@ -34,6 +70,8 @@ Upload actual database and campaign files through the app. They are not required
 These repository, entrypoint, and Python-version settings follow Streamlit's [official deployment guide](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy). The pinned Streamlit version is `1.54.0`; openpyxl is `3.1.5`.
 
 ## Recover after a source update
+
+For PARKED/LEGACY or unfamiliar-layout support, update all four Python modules together: `streamlit_app.py`, `web_checker.py`, `checker.py`, and `auto_match.py`. A missing `auto_match.py` causes an import error before the upload screen opens. This release uses comparison version 7 and automatic-detection version 15. Re-upload the file pair after the update so old session results are cleared.
 
 If `DataGrid.xlsx` from the 29 October CBS APD batch produces the database-header error, confirm the deployed branch includes the Excel dimension fix in `checker.py` and the updated `streamlit_app.py` and `web_checker.py`. That workbook reports a saved range of `A1:C1` even though it contains 37 columns. The fix reads the actual cells and excludes its verified totals footer, detecting 1,453 account records with `Old I.C.` as the key. Upload all four CBS APD CSVs again after updating the deployment. All 1,060 keys are found; email differences remain because the corresponding database Email cells are blank.
 
@@ -47,7 +85,7 @@ If Cloud still reports `cannot import name 'is_datagrid_pl_viber_blast'`, verify
 
 1. Upload the database under **Add your database**.
 2. Upload multiple CSV or Excel files under **Add files to check**. Files with and without headers can be mixed. For the MSB or CBS PL email blast, upload the corresponding `DataGrid.xlsx` snapshot as the database; for the CBS APD email blast, upload `DataGrid (1).xlsx`.
-3. Review the automatic detection summary: it shows each file's worksheet, header row, lookup column, and status. The database must contain `CHCODE`, `primary_key`, or `indexone_uid`, the recognized DataGrid headers (`Name`, `Old I.C.`, `Account No.`, and `Email`), or the SBF endorsement headers described below. A workbook with multiple supported worksheets must be split into separate files before upload.
+3. Review the automatic detection summary: it shows each file's worksheet, header row, lookup column, and status. Expand detected field evidence for inferred layouts. The database must contain `CHCODE`, `primary_key`, or `indexone_uid`, the recognized DataGrid or SBF endorsement headers described below, or a complete, unique account identifier for automatic inference. A workbook with multiple supported worksheets must be split into separate files before upload.
 4. Select **Check files**. The app compares uploaded rows against the database and automatically maps the supported HSBC or DataGrid fields. Campaign subsets are supported.
 5. Read the compact pass/review results. Expand an individual file for its issues, row preview, or field coverage, then download the Excel report.
 
@@ -59,7 +97,7 @@ For `23-10-26 SBF PL EMAIL BLAST.csv`, the app detects `primary_key` as CHCODE. 
 
 Files without headers use column B as CHCODE and include the first row as data. Only CHCODE is checked for these files; the other columns remain **NOT CHECKED**. Original row numbers and values are preserved in the report. The database still needs its column headers.
 
-For the HSBC mobile blasts, add `HSBC DB as of Oct 23, 2026.xlsx` as the database and the Field and NEW ENDO workbooks as files to check. When FLOW_STAGE is absent, each `formatted mobile` is compared with `Mobile phone` for the same CHCODE. All five supported fields remain checked: phone, CHCODE, name, last name, and product type. In recognized HSBC layouts, leading `Mr./Ms.`, `Mr.`, and `Ms.` titles are ignored in last-name comparisons; the surname and suffixes still need to match. The app and report disclose this rule and preserve original values. Successful checks show **MAPPED ROWS MATCH**. Wrong or blank phone numbers show **DIFFERENT**, with expected values from the same account in the app and report. Equivalent Philippine mobile formats are normalized. Files with phone headers need a CHCODE lookup column; the database also needs a supported phone column. A present stage receives the usual validation and mapped account comparison.
+For the HSBC mobile blasts, add `HSBC DB as of Oct 23, 2026.xlsx` as the database and the Field and NEW ENDO workbooks as files to check. When FLOW_STAGE is absent, each `formatted mobile` is compared with `Mobile phone` for the same CHCODE. All five supported fields remain checked: phone, CHCODE, name, last name, and product type. In recognized HSBC layouts, leading `Mr./Ms.`, `Mr.`, and `Ms.` titles are ignored in last-name comparisons; the surname and suffixes still need to match. The app and report disclose this rule and preserve original values. Successful checks show **MAPPED ROWS MATCH**. Wrong or blank phone numbers show **DIFFERENT**, with expected values from the same account in the app and report. Equivalent Philippine mobile formats are normalized. Ordinary CHCODE phone files need a CHCODE lookup column and a supported database phone column; assignment templates and inferred layouts use their disclosed mappings. A present stage receives the usual validation and mapped account comparison.
 
 For the 28 October HSBC SMS blasts, use `HSBC DB as of Oct 28, 2026(1).xlsx` with `28-10-26 HSBC SMS BLAST NEW ENDO.xlsx` and `28-10-26 HSBC SMS BLAST SMS II.xlsx`. They use the same account checks and last-name title rule. SMS II's additional Mobile column is also checked against the same account's Mobile phone.
 
@@ -75,7 +113,7 @@ In customer names, the replacement character `�` matches a corresponding `Ñ` 
 
 Replacing an uploaded database or file clears old results. Run the check again after changes. Files with errors are reported while other files continue. A database error must be corrected before a check can run.
 
-The report includes all checked rows, individual cell differences, and field coverage. Browser previews show up to 500 rows at a time. Full database copy comparison remains available locally through the command-line `--full-copy` option. Explicit engine and command-line checks keep their existing FLOW_STAGE rules, including the full-copy stage requirement; the automatic app allows an absent stage for every detected lookup header. See [README.md](README.md#command-line).
+The report includes all checked rows, individual cell differences, and field coverage. Browser previews show up to 500 rows at a time. Full database copy comparison remains available locally through the command-line `--full-copy` option. Explicit engine and command-line checks keep their existing FLOW_STAGE rules, including the full-copy stage requirement; the automatic app and command-line `--auto` allow an absent stage for detected layouts. See [README.md](README.md#command-line).
 
 ## Data lifecycle and limits
 
@@ -102,4 +140,4 @@ On Windows, double-click **Start Checker.bat** after installing dependencies. It
 python -m unittest discover -s tests -v
 ```
 
-Tests cover CHCODE matching, automatic header and lookup detection, HSBC aliases, numeric/product conversions, duplicate columns, temporary-file cleanup, simultaneous filenames, upload errors, Streamlit previews, report generation, upload replacement, and session reset. They use synthetic data. Actual file-picker uploads should also be tried once in the deployed browser app.
+Tests cover CHCODE matching, automatic header and lookup detection, assignment templates, unfamiliar identifiers, unnamed columns, ambiguous mappings, HSBC aliases, numeric/product conversions, duplicate columns, temporary-file cleanup, simultaneous filenames, upload errors, Streamlit previews, automatic and explicit CLI modes, report generation, upload replacement, and session reset. They use synthetic data. Actual file-picker uploads should also be tried once in the deployed browser app.

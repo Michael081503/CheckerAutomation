@@ -1,6 +1,6 @@
 ﻿# CHCODE Database Checker
 
-A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the lookup column, compares supported fields, and provides an Excel report download. It supports CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, SALAD and PL endorsement email blasts, PL and SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
+A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the lookup column, compares supported fields, and provides an Excel report download. It supports PARKED and LEGACY assignment templates, unfamiliar exports with reliable account identifiers, CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, SALAD and PL endorsement email blasts, PL and SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
@@ -15,6 +15,41 @@ python -m streamlit run streamlit_app.py
 
 On Windows, **Start Checker.bat** launches the same app in your browser. It uses this folder's `.venv` when available, otherwise the `python` command. Keep the terminal open while using the local app. The Streamlit app requires Python 3.10+; it was tested on Python 3.13.
 
+## PARKED and LEGACY templates
+
+Check each template with the database that has the same name without `TEMPLATE`:
+
+| Add your database | Add files to check | Supplied template rows |
+| --- | --- | ---: |
+| `PARKED.xlsx` | `PARKED TEMPLATE.csv` | 2,324 |
+| `LEGACY.xlsx` | `LEGACY TEMPLATE.csv` | 1,470 |
+
+Double-click **Start Checker.bat**, upload one pair, and select **Check files**. Download its report, then use **Start over** to check the other pair. Both supplied pairs were checked successfully: all 2,324 PARKED rows and 1,470 LEGACY rows match across the four checked fields, with no missing or blank debtor IDs. Headers are excluded. The local reports are `reports/PARKED_check_2026-11-03.xlsx` and `reports/LEGACY_check_2026-11-03.xlsx`. The checker validates four fields on the same debtor record:
+
+| Template column | Database column | Check |
+| --- | --- | --- |
+| PARKED's unnamed column K, displayed as `Unnamed column K`; LEGACY's `Debtor` | `Debtor ID` | Customer lookup; identifiers preserve leading zeros |
+| `FullName` | `Name` | Customer name |
+| `LastName` | `Account No.` | Account number as text |
+| `Phone` | `Email` | Phone number, accepting equivalent Philippine mobile formats |
+
+The source headers are unusual: `LastName` contains an account number, and the database's `Email` column contains the intended phone number. These established template mappings remain fixed even when every uploaded value differs, so incorrect values are reported rather than causing a different mapping. Identifier checks never switch to another lookup column for an individual row. A found debtor with a wrong account, name, or phone is **DIFFERENT**; an unknown debtor is **NOT FOUND**, and a blank debtor is **BLANK KEY**. `FLOW_STAGE` is optional; the filename identifies each template.
+
+`FirstName` and `CHCode` contain staff assignments and remain **NOT CHECKED**. `OB`, `Monthly`, `Terms`, `Promo`, and `Level` also remain unchecked. Blank or constant campaign columns are not evidence of a database match. All original values, including the unnamed column, remain in the report; the input files are read without modification.
+
+Run the same automatic checks from this folder:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database "..\AUTOCHECKER\PARKED.xlsx" --files "..\AUTOCHECKER\PARKED TEMPLATE.csv" --output "reports/PARKED_check_2026-11-03.xlsx"
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database "..\AUTOCHECKER\LEGACY.xlsx" --files "..\AUTOCHECKER\LEGACY TEMPLATE.csv" --output "reports/LEGACY_check_2026-11-03.xlsx"
+```
+
+## New file and database layouts
+
+The browser app and command-line `--auto` mode can inspect unfamiliar Excel and CSV layouts. The database needs a complete, unique debtor, customer, or account identifier. The checker considers compatible identifier headers and matching values, then checks candidate fields against those same identified database records. Names alone, staff assignments, repeated campaign values, and blank/blank pairs cannot establish customer identity.
+
+Review the detected lookup, proposed fields, and evidence before selecting **Check files**. Known profile mappings remain fixed so changed values still produce differences. For unfamiliar layouts, fields without enough header or same-record evidence stay **NOT CHECKED**. Unknown or ambiguous layouts receive an error requiring attention; they are not reported as passing. The selected lookup applies to the whole file, including unknown and blank identifiers. Future exports with the established PARKED/LEGACY layout are recognized from their columns rather than their filenames.
+
 ## Deploy to Streamlit Community Cloud
 
 Upload the app source to a GitHub repository, then select that repository in Streamlit Community Cloud with **Main file path: `streamlit_app.py`** and **Python 3.13** in Advanced settings. See [DEPLOYMENT.md](DEPLOYMENT.md) for the exact file list and steps. The official [deployment guide](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy) describes the repository and entrypoint settings.
@@ -27,7 +62,7 @@ Uploaded data is processed on the app server. Each browser session keeps its own
 
 1. Add the database `.xlsx`, `.xlsm`, or `.csv` file in **Add your database**.
 2. Add multiple files in **Add files to check**. Excel and CSV files can be mixed, including files with and without headers.
-3. Review the detection summary for each file's worksheet, header row, lookup column, and status. The database needs a `CHCODE`, `primary_key`, or `indexone_uid` header, supported DataGrid headers, or the SBF endorsement headers described below. If a workbook has multiple supported worksheets, save the intended worksheet as a separate file and upload it.
+3. Review the detection summary for each file's worksheet, header row, lookup column, and status. The database needs a `CHCODE`, `primary_key`, or `indexone_uid` header, supported DataGrid or endorsement headers, or a complete, unique account identifier for automatic inference. If a workbook has multiple supported worksheets, save the intended worksheet as a separate file and upload it.
 4. Click **Check files** to compare your uploaded rows against the database; smaller campaign subsets are supported.
 5. Read the compact results, then expand a file to see its **Issues**, **Rows**, or **Fields checked**. Row previews default to entries needing review when issues exist.
 6. Click **Download Excel report** for every original row, changed value, and field mapping.
@@ -36,7 +71,7 @@ The app selects the supported worksheet and lookup column automatically. Uploade
 
 These header aliases are defined in the shared `checker.py` source and apply to the web app, desktop app, and command-line checker. They work with ordinary header layouts as well as recognized campaign templates. Explicit `CHCODE` takes priority in CHCODE layouts; recognized SALAD Viber blasts use phone and full name as described below. Existing DataGrid email layouts retain their usual defaults, and the web app uses database matches to distinguish candidate identifiers.
 
-In the automatic app, files without `FLOW_STAGE` that contain a named phone column compare each number with the database record for the same CHCODE. The detected `CHCODE`, `primary_key`, or `indexone_uid` column remains the lookup key, and other supported fields are also compared. Supported phone headers include `Mobile phone`, `formatted mobile`, `Phone Number`, `Mobile Number`, `Phone`, `Mobile`, and `Contact Number`; case, spaces, and underscores are ignored. A phone file without a CHCODE lookup column, or a database without a supported phone column, produces a file error. Files use their filenames when `FLOW_STAGE` is absent. A present `FLOW_STAGE` must contain one consistent, nonblank identifier. Files without headers use column B as CHCODE, retain the first row as data, and are identified by filename. The database does not need a `FLOW_STAGE` column.
+In ordinary CHCODE layouts, files without `FLOW_STAGE` that contain a named phone column compare each number with the database record for the same CHCODE. The detected `CHCODE`, `primary_key`, or `indexone_uid` column remains the lookup key, and other supported fields are also compared. Supported phone headers include `Mobile phone`, `formatted mobile`, `Phone Number`, `Mobile Number`, `Phone`, `Mobile`, and `Contact Number`; case, spaces, and underscores are ignored. Such files need a CHCODE lookup column and a supported database phone column. PARKED/LEGACY templates and inferred layouts use their disclosed debtor/account key and phone mapping instead. Files use their filenames when `FLOW_STAGE` is absent. A present `FLOW_STAGE` must contain one consistent, nonblank identifier. Files without headers use column B as CHCODE, retain the first row as data, and are identified by filename. The database does not need a `FLOW_STAGE` column.
 
 ## HSBC mobile blasts without FLOW_STAGE
 
@@ -294,7 +329,7 @@ Identical rows are paired first. Remaining rows with the same lookup key are pai
 
 ## File and matching rules
 
-- Column headers are detected from `CHCODE`, supported identifier headers such as `primary_key` and `indexone_uid`, or the supported DataGrid layout; titles, notes, and blank rows above them are skipped. Each data column needs a name on that header row. Files without headers use column B as CHCODE and keep row 1. With headers, later repeated names get visible suffixes, such as `CHCode [2]` or `blank [2]`; every column and its values are preserved. The first `CHCODE` column takes priority when present. Header comparisons ignore letter case and outer spaces.
+- Column headers are detected from `CHCODE`, supported identifier headers such as `primary_key` and `indexone_uid`, or supported database layouts; titles, notes, and blank rows above them are skipped. The strict reader requires a name for every data column. Automatic assignment-template and unfamiliar-layout inspection can label populated unnamed columns, such as `Unnamed column K`, without shifting or discarding values. Files without headers use column B as CHCODE and keep row 1. With headers, later repeated names get visible suffixes, such as `CHCode [2]` or `blank [2]`; every column and its values are preserved. The first `CHCODE` column takes priority in ordinary CHCODE layouts. Header comparisons ignore letter case and outer spaces.
 - The app selects a single supported worksheet automatically. A workbook with multiple supported worksheets needs to be split into separate files, so no worksheet is silently omitted.
 - Text comparisons ignore letter case and trim outer spaces. Product-family aliases are recognized without case differences.
 - Text key `00123` remains distinct from `123`. Store keys and account numbers as text when leading zeros matter; zeros shown only by Excel number formatting are not part of the stored value.
@@ -303,7 +338,7 @@ Identical rows are paired first. Remaining rows with the same lookup key are pai
 - When database keys repeat, uploaded-row mode accepts any candidate matching every mapped field. If none match, the closest candidate by number of differing mapped fields is shown.
 - File errors do not stop other files. Replacing the uploaded database or files clears old results. A database error must be corrected before checking.
 - Excel formula cells use the values last saved by Excel. Recalculate and save workbooks in Excel before checking formulas. A formula without a cached value is treated as blank.
-- CSV supports UTF-8 (including BOM) and Windows-1252, with comma, semicolon, tab, or pipe delimiters.
+- CSV supports UTF-8 (including BOM) and Windows-1252, with comma, semicolon, tab, or pipe delimiters and standard double-quote escaping. Apostrophes in names are preserved as ordinary text.
 - Convert older `.xls` or actual `.accdb` / `.sqlite` databases to Excel or CSV first.
 - All rows are loaded into memory. Preview shows up to 500 rows per file; reports contain every checked row. Very large files depend on available memory and Excel's worksheet limits.
 
@@ -315,7 +350,9 @@ Source files are read without modification. Report text beginning with `=` is sa
 python scripts/check_files.py --database "database.xlsx" --files "campaign1.csv" "campaign2.csv" --output "reports/check.xlsx"
 ```
 
-Use `--database-sheet "Sheet1"` to choose a database worksheet, or `--full-copy` to require a complete database copy. The command-line interface retains its explicit controls and reads files with headers; without overrides, lookup columns follow the recognized header layout. Use `--file-key "indexone_uid"` to override the lookup column for every file in that command, and optionally `--database-key "Old I.C."` to override the database key. Header names ignore letter case and outer spaces. A file missing the requested header receives an error while other files continue; it never silently falls back to another key. Run separate commands when files need different lookup columns. The JSON output and Excel summary include the selected lookup columns. Supported field mappings are the same as in the Streamlit app.
+Add `--auto` to use the same detection, inferred mappings, unnamed-column handling, and optional missing `FLOW_STAGE` behavior as the browser app. It saves the browser adapter's generated Excel report and prints the usual per-file JSON summaries. `--auto` cannot be combined with `--database-sheet`, `--database-key`, `--file-key`, or `--full-copy`; use the explicit mode below when those controls are needed. Both modes reject an output path that would overwrite an input file.
+
+Without `--auto`, use `--database-sheet "Sheet1"` to choose a database worksheet, or `--full-copy` to require a complete database copy. This explicit mode reads files with headers; without overrides, lookup columns follow the recognized header layout. Use `--file-key "indexone_uid"` to override the lookup column for every file in that command, and optionally `--database-key "Old I.C."` to override the database key. Header names ignore letter case and outer spaces. A file missing the requested header receives an error while other files continue; it never silently falls back to another key. Run separate commands when files need different lookup columns. The JSON output and Excel summary include the selected lookup columns. Established field mappings use the shared comparison engine; new layout inference is available through `--auto`.
 
 ```powershell
 python scripts/check_files.py --database "C:\Users\SPM\Desktop\HSBC\DataGrid.xlsx" --files "C:\Users\SPM\Desktop\HSBC\22-10-26 MSB PL EMAIL BLAST.csv" --output "reports/MSB_PL_check.xlsx"

@@ -19,7 +19,7 @@ from checker import (
 )
 from auto_match import database_key_candidates, has_identifier_header, infer_layout, is_assignment_template
 
-AUTO_DETECTION_VERSION = 15
+AUTO_DETECTION_VERSION = 16
 
 
 @dataclass(frozen=True)

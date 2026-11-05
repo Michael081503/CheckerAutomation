@@ -7,6 +7,7 @@ from streamlit.testing.v1 import AppTest
 from test_cbs_pl import cbs_pl_account_uploads
 from test_sbf_pl_viber import BLAST_HEADERS as PL_HEADERS, pl_database, pl_row
 from test_salad_endo import endo_blast, endo_database, regular_database
+from test_sbf_salad_email import salad_email_pair
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
 from test_web_checker import cbs_apd_uploads, cbs_pl_uploads, csv_upload, database_upload, datagrid_upload, email_blast_upload, hsbc_mobile_uploads, xlsx_upload
@@ -65,6 +66,24 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertTrue(self.app.button(key="run_check").disabled)
         self.assertTrue(any("Add a database and your files" in caption.value for caption in self.app.caption))
         self.assertEqual(len(self.app.get("download_button")), 0)
+
+    def test_salad_email_detects_fields_without_showing_static_instructions(self):
+        database, upload = salad_email_pair()
+        self.database = BrowserFile(database)
+        self.files = [BrowserFile(upload)]
+        self.run_check()
+        self.assertEqual(self.detection_rows().iloc[0]["Check"], "SALAD email account details")
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual(result.count("MATCHED"), 2)
+        coverage = next(frame.value for frame in self.app.dataframe if "Coverage" in frame.value.columns)
+        self.assertEqual(list(coverage["Coverage"]).count("CHECKED"), 8)
+        self.assertEqual(len(self.app.get("download_button")), 1)
+        captions = "\n".join(item.value for item in self.app.caption)
+        for removed in ("CHCODE can be in", "Recognized CHCODE files without", "For PARKED and LEGACY, add",
+                        "New layouts are matched using", "SALAD Viber blasts use", "PL Viber blasts use",
+                        "SALAD and PL NEW ENDO email blasts use", "Uploads are processed in this session",
+                        "Check your campaign files against your database"):
+            self.assertNotIn(removed, captions)
 
     def test_cbs_pl_buckets_pass_and_disclose_unused_legacy_identifier(self):
         database, files = cbs_pl_account_uploads()

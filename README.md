@@ -4,6 +4,32 @@ A Streamlit app for validating rows in multiple Excel or CSV files against a dat
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
+## SBF SALAD email blasts with DataGrid
+
+Upload `DataGrid (1)(1).xlsx` as the database and `05-11-26 SBF SALAD EMAIL BLAST.csv` as the file to check. Select **Check files**. Detection uses headers and identifiers, so renamed files and future exports with the same layout work without selecting columns. The website omits the static tutorial paragraphs below the upload panels; detection, results, field coverage, and report downloads remain available.
+
+The SALAD email layout includes agent assignments, `OB`, `CRITERIA`, and three monthly/payment offers. Both `primary_key` and `indexone_uid` match `Old I.C.`; when they contain identical matching identifiers, the browser uses `primary_key` for lookup and checks both columns. Every mapped value must match the same database row:
+
+| File column | DataGrid column | Comparison |
+| --- | --- | --- |
+| `primary_key`, `indexone_uid` | `Old I.C.` | Text; leading zeros preserved |
+| `accountnumber` | `Account No.` | Text |
+| `email` | `Email` | Text |
+| `chname` | `Name` | Customer name |
+| `agentcode` | `AgentCode` | Text |
+| `agentname` | `AgentName` | Text |
+| `OB` | `OB` | Numeric; commas and equivalent decimal formatting accepted |
+
+These eight checks apply when the corresponding database columns exist. Wrong values remain differences; the checker never picks a different customer just to make a row pass. `cc`, `bcc`, `CRITERIA`, `monthly1`–`monthly3`, and `amount1`–`amount3` remain **NOT CHECKED**. Payment offers and campaign criteria have no confirmed database mapping or calculation rule. Their original values and the coverage are preserved in the report. Other SALAD endorsement and Viber layouts retain their own mappings.
+
+The supplied November 5, 2026 pair contains 15,000 data rows. All 15,000 match across the eight mapped fields, with no differences, missing accounts, or blank keys. The local report is `reports/SBF_SALAD_EMAIL_check_2026-11-05.xlsx`; source data and reports are excluded from GitHub.
+
+Run the same detection and generate a report locally:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database "..\AUTOCHECKER\DataGrid (1)(1).xlsx" --files "..\AUTOCHECKER\05-11-26 SBF SALAD EMAIL BLAST.csv" --output "reports/SBF_SALAD_EMAIL_check_2026-11-05.xlsx"
+```
+
 ## Start
 
 From this folder, install the pinned dependencies and launch Streamlit:

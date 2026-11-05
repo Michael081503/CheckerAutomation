@@ -13,18 +13,18 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 7)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 8)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 15:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 16:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
-from checker import Options, find_header, is_customer_name_column, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_hsbc_mobile_pair, is_salad_endo_pair, phone_column
+from checker import Options, find_header, is_customer_name_column, is_datagrid_pl_viber_blast, is_datagrid_salad_email_blast, is_datagrid_viber_blast, is_hsbc_mobile_pair, is_salad_endo_pair, phone_column
 from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check
 
 PREVIEW_LIMIT = 500
@@ -206,7 +206,6 @@ def main():
     title, restart = st.columns([4, 1], vertical_alignment="center")
     with title:
         st.title("File checker")
-        st.caption("Check your campaign files against your database.")
     with restart:
         st.button("Start over", on_click=clear_session, key="clear_session", type="tertiary", width="stretch")
     epoch = st.session_state.get("upload_epoch", 0)
@@ -259,6 +258,7 @@ def main():
                 "Database lookup column": (item.source.database_column or prepared.database.column
                                            if info and prepared.database else ""),
                 "Check": ("Detected field mappings" if item.inferred
+                          else "SALAD email account details" if info and is_datagrid_salad_email_blast(info.headers)
                           else "Account number, name and email" if info and prepared.database_info
                           and is_salad_endo_pair(info.headers, prepared.database_info.headers, item.source.column, prepared.database.column)
                           else "Viber debtor ID, phone and name" if info and is_datagrid_pl_viber_blast(info.headers)
@@ -288,14 +288,6 @@ def main():
         st.caption("Add a database and your files to get started. Excel and CSV are supported.")
     elif prepared and not prepared.database_error and not prepared.files:
         st.caption("Add at least one file to check.")
-    st.caption("CHCODE can be in CHCODE, primary_key, or indexone_uid. The lookup column is detected automatically. Headerless files use column B and include row 1; only CHCODE is checked.")
-    st.caption("Recognized CHCODE files without FLOW_STAGE compare phone numbers with the matching database record.")
-    st.caption("For PARKED and LEGACY, add the workbook without TEMPLATE as the database and its TEMPLATE file under files to check.")
-    st.caption("New layouts are matched using headers and values. Review detected field mappings; uncertain layouts are reported for review.")
-    st.caption("SALAD Viber blasts use Phone and FullName to check the same DataGrid row.")
-    st.caption("PL Viber blasts use Debtorid to check FullName and Phone against the same DataGrid record.")
-    st.caption("SALAD and PL NEW ENDO email blasts use accountnumber to check the name and email against caseAccountNo in the endorsement workbook.")
-    st.caption("Uploads are processed in this session. Start over clears the current uploads and results.")
 
     options = Options(ignore_case=True, trim_spaces=True, mapped_fields=True,
                       require_flow_stage=True, allow_missing_flow_stage=True)

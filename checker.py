@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 7
+COMPARISON_VERSION = 8
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -170,6 +170,14 @@ def is_datagrid_email_blast(headers: Iterable) -> bool:
     names = _header_names(headers)
     return ({"email", "chname", "accountnumber"}.issubset(names)
             and bool(set(CHCODE_ALIASES[1:]) & names))
+
+
+def is_datagrid_salad_email_blast(headers: Iterable) -> bool:
+    """Recognize SALAD email exports with agent assignments and payment offers."""
+    headers = list(headers)
+    return (is_datagrid_email_blast(headers)
+            and {"agentcode", "agentname", "ob", "criteria", "monthly1", "monthly2",
+                 "monthly3", "amount1", "amount2", "amount3"}.issubset(_header_names(headers)))
 
 
 def is_datagrid_viber_blast(headers: Iterable) -> bool:
@@ -526,6 +534,16 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
             datagrid_aliases["campaignbucket"] = ("Account Type", "Text")
         if "financing/card no." in database_names:
             datagrid_aliases["financingnumber"] = ("Financing/Card No.", "Text")
+        if is_datagrid_salad_email_blast(file_headers):
+            # These assignments have explicit counterparts in this export.
+            # Payment offers and criteria are campaign rules, not balances.
+            for field, expected, comparison in (
+                ("agentcode", "AgentCode", "Text"),
+                ("agentname", "AgentName", "Text"),
+                ("ob", "OB", "Number"),
+            ):
+                if expected.casefold() in database_names:
+                    datagrid_aliases[field] = (expected, comparison)
     mappings = []
     for name in file_headers:
         if name == file_key:
@@ -669,6 +687,10 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
     result.mappings = mappings
     result.ignored_columns = [name for name in target.headers if name not in {item.file_column for item in mappings}
                               and name != result.flow_stage_column]
+    if is_datagrid_pair(target.headers, table.headers, source.column, database.column) and is_datagrid_salad_email_blast(target.headers):
+        for name in result.ignored_columns:
+            if name.casefold() in {"criteria", "monthly1", "monthly2", "monthly3", "amount1", "amount2", "amount3"}:
+                result.unchecked_reasons[name] = "Campaign criteria or payment offer; no confirmed database mapping"
     if not target.rows:
         raise ValueError("The selected file has column headers but no data rows to validate.")
     positions = [(target.headers.index(item.file_column), table.headers.index(item.database_column), item) for item in mappings]

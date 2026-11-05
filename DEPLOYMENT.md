@@ -71,7 +71,7 @@ These repository, entrypoint, and Python-version settings follow Streamlit's [of
 
 ## Recover after a source update
 
-For PARKED/LEGACY or unfamiliar-layout support, update all four Python modules together: `streamlit_app.py`, `web_checker.py`, `checker.py`, and `auto_match.py`. A missing `auto_match.py` causes an import error before the upload screen opens. This release uses comparison version 7 and automatic-detection version 15. Re-upload the file pair after the update so old session results are cleared.
+For SALAD email, PARKED/LEGACY or unfamiliar-layout support, update all four Python modules together: `streamlit_app.py`, `web_checker.py`, `checker.py`, and `auto_match.py`. A missing `auto_match.py` causes an import error before the upload screen opens. This release uses comparison version 8 and automatic-detection version 16. Re-upload the file pair after the update so old session results are cleared.
 
 If `DataGrid.xlsx` from the 29 October CBS APD batch produces the database-header error, confirm the deployed branch includes the Excel dimension fix in `checker.py` and the updated `streamlit_app.py` and `web_checker.py`. That workbook reports a saved range of `A1:C1` even though it contains 37 columns. The fix reads the actual cells and excludes its verified totals footer, detecting 1,453 account records with `Old I.C.` as the key. Upload all four CBS APD CSVs again after updating the deployment. All 1,060 keys are found; email differences remain because the corresponding database Email cells are blank.
 

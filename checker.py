@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 8
+COMPARISON_VERSION = 9
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -159,6 +159,20 @@ def is_datagrid_database(headers: Iterable) -> bool:
     return {"name", "old i.c.", "account no.", "email"}.issubset(names)
 
 
+def is_datagrid_phone_database(headers: Iterable) -> bool:
+    """DataGrid contact exports can contain Phone instead of Email."""
+    return {"name", "old i.c.", "account no.", "phone"}.issubset(_header_names(headers))
+
+
+def is_datagrid_balance_viber_blast(headers: Iterable) -> bool:
+    """Phone-identified HIGH/LOW BAL exports; exclude debtor-ID templates."""
+    names = _header_names(headers)
+    return ({"fullname", "firstname", "lastname", "phone", "chcode", "ob", "monthly",
+             "terms", "promo", "level"}.issubset(names)
+            and not names.intersection({"debtor", "debtorid", "debtor id", ""})
+            and not any(name.startswith("unnamed column ") for name in names))
+
+
 def is_salad_endo_database(headers: Iterable) -> bool:
     """Recognize SBF SALAD and regular PL endorsement source columns."""
     return {"caseno", "caseaccountno", "casecustomername", "casecustomeremail", "collector"}.issubset(
@@ -204,12 +218,12 @@ def match_column(headers: Iterable[str], database_headers: Iterable[str] | None 
     database_headers = list(database_headers) if database_headers is not None else None
     if is_datagrid_pl_viber_blast(headers):
         return next(header for header in headers if header.strip().casefold() == "debtorid")
-    if is_datagrid_viber_blast(headers):
+    if is_datagrid_viber_blast(headers) or is_datagrid_balance_viber_blast(headers):
         return next(header for header in headers if header.strip().casefold() == "phone")
     for header in headers:
         if header.strip().casefold() == "chcode":
             return header
-    if is_datagrid_database(headers):
+    if is_datagrid_database(headers) or is_datagrid_phone_database(headers):
         return next(header for header in headers if header.strip().casefold() == "old i.c.")
     if is_salad_endo_database(headers):
         return next(header for header in headers if header.strip().casefold() == "caseaccountno")
@@ -273,6 +287,18 @@ def is_datagrid_pl_viber_pair(file_headers: Iterable[str], database_headers: Ite
             and database_key.strip().casefold() in {"old i.c.", "debtor id"})
 
 
+def is_datagrid_balance_viber_pair(file_headers: Iterable[str], database_headers: Iterable[str],
+                                   file_key: str | None = None, database_key: str | None = None) -> bool:
+    file_headers, database_headers = list(file_headers), list(database_headers)
+    file_key = match_column(file_headers) if file_key is None else file_key
+    database_key = match_column(database_headers) if database_key is None else database_key
+    return (is_datagrid_balance_viber_blast(file_headers)
+            and is_datagrid_phone_database(database_headers)
+            and {"ob", "level"}.issubset(_header_names(database_headers))
+            and file_key.strip().casefold() == "phone"
+            and database_key.strip().casefold() in {"old i.c.", "phone"})
+
+
 def is_hsbc_mobile_pair(file_headers: Iterable[str], database_headers: Iterable[str],
                         file_key: str | None = None, database_key: str | None = None) -> bool:
     """Recognize the HSBC mobile blast and the database fields it validates."""
@@ -292,6 +318,7 @@ def is_filename_identified_pair(file_headers: Iterable[str], database_headers: I
     """Supported mapped layouts may use filenames when FLOW_STAGE is absent."""
     file_headers, database_headers = list(file_headers), list(database_headers)
     return (is_datagrid_pair(file_headers, database_headers, file_key, database_key)
+            or is_datagrid_balance_viber_pair(file_headers, database_headers, file_key, database_key)
             or is_datagrid_viber_pair(file_headers, database_headers, file_key, database_key)
             or is_datagrid_pl_viber_pair(file_headers, database_headers, file_key, database_key)
             or is_salad_endo_pair(file_headers, database_headers, file_key, database_key)
@@ -310,7 +337,7 @@ def _has_supported_header(values: Iterable) -> bool:
 
 def _is_datagrid_total(headers: list[str], records: list[tuple[int, tuple]]) -> bool:
     """Identify a final count-and-sums footer without hiding blank-key accounts."""
-    if not is_datagrid_database(headers) or len(records) < 2:
+    if not (is_datagrid_database(headers) or is_datagrid_phone_database(headers)) or len(records) < 2:
         return False
     names = [name.casefold() for name in headers]
     if "no" not in names:
@@ -494,6 +521,12 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
                      file_key: str, database_key: str) -> list[ColumnMapping]:
     """Direct header matches and explicit HSBC export aliases; never infer by position."""
     database_names = {name.casefold(): name for name in database_headers}
+    if is_datagrid_balance_viber_pair(file_headers, database_headers, file_key, database_key):
+        fields = {"fullname": ("Name", "Text"), "phone": ("Phone", "Phone"),
+                  "ob": ("OB", "Number"), "level": ("Level", "Text")}
+        return [ColumnMapping(name, database_names[fields[name.casefold()][0].casefold()],
+                              fields[name.casefold()][1])
+                for name in file_headers if name.casefold() in fields]
     if is_salad_endo_pair(file_headers, database_headers, file_key, database_key):
         # Campaign agent assignments and blank legacy IDs are not account keys.
         fields = {"accountnumber": "caseAccountNo", "chname": "caseCustomerName", "email": "caseCustomerEmail"}
@@ -687,6 +720,12 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
     result.mappings = mappings
     result.ignored_columns = [name for name in target.headers if name not in {item.file_column for item in mappings}
                               and name != result.flow_stage_column]
+    if is_datagrid_balance_viber_blast(target.headers):
+        for name in result.ignored_columns:
+            if name.casefold() in {"monthly", "terms", "promo"}:
+                result.unchecked_reasons[name] = "Campaign offer; no confirmed database mapping or calculation rule"
+            elif name.casefold() in {"firstname", "lastname", "chcode"}:
+                result.unchecked_reasons[name] = "Staff assignment or template field; customer name is checked using FullName"
     if is_datagrid_pair(target.headers, table.headers, source.column, database.column) and is_datagrid_salad_email_blast(target.headers):
         for name in result.ignored_columns:
             if name.casefold() in {"criteria", "monthly1", "monthly2", "monthly3", "amount1", "amount2", "amount3"}:
@@ -808,7 +847,7 @@ def check_files(database: Source, files: list[Source], options: Options,
         key_name = "CHCODEs" if database.column.casefold() == "chcode" else f"values in '{database.column}'"
         raise ValueError(f"The database has blank {key_name} at row(s) {', '.join(map(str, blank_rows[:20]))}. Fill these before comparing rows.")
     results = []
-    viber_lookup = None
+    viber_lookups = {}
     pl_viber_lookup = None
     inferred_lookups = {}
     for index, source in enumerate(files, 1):
@@ -883,14 +922,18 @@ def check_files(database: Source, files: list[Source], options: Options,
                         candidate_lookup.setdefault(debtor, []).append(number)
                     pl_viber_lookup = candidate_lookup
                 comparison_lookup = pl_viber_lookup
-            if (options.mapped_fields and not source.database_column and is_datagrid_viber_blast(target.headers)
+            if (options.mapped_fields and not source.database_column
+                    and (is_datagrid_viber_blast(target.headers) or is_datagrid_balance_viber_blast(target.headers))
                     and source.column.casefold() == "phone"):
-                if not is_datagrid_viber_pair(target.headers, table.headers, source.column, database.column):
+                balance_viber = is_datagrid_balance_viber_blast(target.headers)
+                if balance_viber and not is_datagrid_balance_viber_pair(target.headers, table.headers, source.column, database.column):
+                    raise ValueError("Balance Viber checks require a DataGrid database with Name, Old I.C., Account No., Phone, OB, and Level columns, using Old I.C. or Phone as its database key.")
+                if not balance_viber and not is_datagrid_viber_pair(target.headers, table.headers, source.column, database.column):
                     raise ValueError("SALAD Viber checks require a DataGrid database with Name, Old I.C., Account No., Email, and Last Called No. columns, using Old I.C. or Last Called No. as its database key.")
-                database_phone = find_header(table.headers, "Last Called No.")
+                database_phone = find_header(table.headers, "Phone" if balance_viber else "Last Called No.")
                 comparison_database = replace(database, column=database_phone)
                 result.database_match_column = database_phone
-                if viber_lookup is None:
+                if database_phone not in viber_lookups:
                     viber_lookup = {}
                     phone_position = table.headers.index(database_phone)
                     for number, values in table.rows:
@@ -899,9 +942,10 @@ def check_files(database: Source, files: list[Source], options: Options,
                         phone = compare_value(values[phone_position], "Phone", options)
                         if phone:
                             viber_lookup.setdefault(phone, []).append(number)
-                if not viber_lookup:
-                    raise ValueError("The database Last Called No. column has no nonblank phone numbers.")
-                comparison_lookup = viber_lookup
+                    viber_lookups[database_phone] = viber_lookup
+                if not viber_lookups[database_phone]:
+                    raise ValueError(f"The database {database_phone} column has no nonblank phone numbers.")
+                comparison_lookup = viber_lookups[database_phone]
             if (options.mapped_fields and options.allow_missing_flow_stage and source.has_headers
                     and not find_header(target.headers, "FLOW_STAGE") and phone_column(target.headers)
                     and not phone_column(table.headers)

@@ -15,11 +15,11 @@ from typing import Callable
 
 from checker import (
     CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, check_files, chcode_columns, export_report,
-    find_header, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, match_column, normalize, phone_column, read_table, sheet_names,
+    find_header, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, match_column, normalize, phone_column, read_table, sheet_names,
 )
 from auto_match import database_key_candidates, has_identifier_header, infer_layout, is_assignment_template
 
-AUTO_DETECTION_VERSION = 16
+AUTO_DETECTION_VERSION = 17
 
 
 @dataclass(frozen=True)
@@ -113,6 +113,8 @@ def _key_column(table: Table, database_keys: set[str], database_headers=()) -> t
         raise ValueError("SBF endorsement email files require accountnumber, chname, and email columns.")
     if is_datagrid_pl_viber_blast(table.headers):
         return match_column(table.headers), "PL Viber layout detected; Debtorid matches DataGrid Debtor ID; FullName and Phone are checked against Name and Last Called No. on the same row"
+    if is_datagrid_balance_viber_blast(table.headers):
+        return match_column(table.headers), "Balance Viber layout detected; Phone matches DataGrid Phone; FullName, OB, and Level are checked against Name, OB, and Level on the same row. Monthly, Terms, and Promo have no confirmed calculation rule"
     if is_datagrid_viber_blast(table.headers):
         return match_column(table.headers), "SALAD Viber layout detected; Phone matches DataGrid Last Called No. and FullName is checked against Name on the same row"
     chcode = find_header(table.headers, "CHCODE")
@@ -242,9 +244,15 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                             probe = read_table(path, sheet, headers_only=True)
                         except ValueError:
                             probe = read_table(path, sheet, headers_only=True, allow_unnamed_headers=True)
-                        infer = (is_assignment_template(probe.headers) or inferred_database
-                                 or (not match_column(probe.headers, table.headers)
-                                     and has_identifier_header(probe.headers)))
+                        if is_assignment_template(probe.headers):
+                            # PARKED has a trailing unnamed debtor-ID column.
+                            # Inspect the actual data width before distinguishing
+                            # it from a phone-based balance Viber export.
+                            probe = read_table(path, sheet, headers_only=True, allow_unnamed_headers=True)
+                        infer = (not is_datagrid_balance_viber_blast(probe.headers)
+                                 and (is_assignment_template(probe.headers) or inferred_database
+                                      or (not match_column(probe.headers, table.headers)
+                                          and has_identifier_header(probe.headers))))
                         if infer:
                             target = read_table(path, sheet, allow_unnamed_headers=True)
                             layout = infer_layout(target, table)
@@ -265,6 +273,7 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                 if (has_headers and phone_column(target.headers)
                         and layout is None
                         and not is_datagrid_viber_blast(target.headers) and not is_datagrid_pl_viber_blast(target.headers)
+                        and not is_datagrid_balance_viber_blast(target.headers)
                         and not find_header(target.headers, "FLOW_STAGE")):
                     note += "; no FLOW_STAGE detected; phone numbers are compared for the same CHCODE"
                 info = Inspection(names, target.sheet, tuple(target.headers), column,

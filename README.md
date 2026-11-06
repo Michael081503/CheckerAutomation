@@ -4,6 +4,32 @@ A Streamlit app for validating rows in multiple Excel or CSV files against a dat
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
+## SBF HIGH / LOW BAL Viber blasts with DataGrid
+
+Upload `DataGrid(3).xlsx` as the database and add all HIGH BAL CSV and LOW BAL Excel batches under **Add files to check**. Click **Check files**. Future dates, renamed files, new batches, reordered columns, and additional campaign columns use the same header detection; no filename list or manual mapping is required. Unfamiliar layouts still use the existing identifier-based inference and flag unsupported or ambiguous layouts for review.
+
+This layout has `Level` without a debtor-ID column. Its DataGrid uses `Phone` instead of `Email`. The checker matches `Phone` to DataGrid `Phone`, accepting equivalent Philippine mobile formats, and compares all four fields on the same database row:
+
+| File column | DataGrid column | Comparison |
+| --- | --- | --- |
+| `Phone` | `Phone` | Phone number; customer lookup |
+| `FullName` | `Name` | Customer name |
+| `OB` | `OB` | Numeric; commas and equivalent decimals accepted |
+| `Level` | `Level` | Text |
+
+The checker uses `Phone` consistently even when `Last Called No.` is also present. Wrong names, balances, or levels produce **DIFFERENT**; unknown phones produce **NOT FOUND** and blank phones produce **BLANK KEY**. For a shared phone, all fields must match one database row. It does not combine values from different customers. Missing required database fields produce an error. PARKED/LEGACY debtor-ID templates, PL Viber debtor-ID files, and SALAD Viber `Level Endo` files retain their own detection and mappings.
+
+`FirstName`, `LastName`, and `CHCode` are staff/template fields in this layout. `Monthly`, `Terms`, and `Promo` have no confirmed database mapping or calculation rule. These six fields remain **NOT CHECKED**, and additional unknown columns also remain unchecked. All original values, field coverage, and differences appear in the Excel report. A mapped-row match covers only the four checked fields.
+
+The supplied November 6, 2026 files contain 16,723 campaign rows: 964 HIGH BAL and 15,759 LOW BAL. All match across the four supported fields, with no differences, missing phones, or blank phone keys. The existing customer-name rule accepts an encoding replacement character only for a corresponding ñ. The local report is `reports/SBF_VIBER_BAL_check_2026-11-06.xlsx`; inputs are read without modification and reports remain excluded from GitHub.
+
+Run the same automatic check locally:
+
+```powershell
+$campaignFiles = @(Get-ChildItem '..\AUTOCHECKER\06-11-26 SBF VIBER*' | ForEach-Object { $_.FullName })
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database "..\AUTOCHECKER\DataGrid(3).xlsx" --files $campaignFiles --output "reports/SBF_VIBER_BAL_check_2026-11-06.xlsx"
+```
+
 ## SBF SALAD email blasts with DataGrid
 
 Upload `DataGrid (1)(1).xlsx` as the database and `05-11-26 SBF SALAD EMAIL BLAST.csv` as the file to check. Select **Check files**. Detection uses headers and identifiers, so renamed files and future exports with the same layout work without selecting columns. The website omits the static tutorial paragraphs below the upload panels; detection, results, field coverage, and report downloads remain available.

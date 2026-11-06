@@ -13,18 +13,18 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 8)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 9)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 16:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 17:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
-from checker import Options, find_header, is_customer_name_column, is_datagrid_pl_viber_blast, is_datagrid_salad_email_blast, is_datagrid_viber_blast, is_hsbc_mobile_pair, is_salad_endo_pair, phone_column
+from checker import Options, find_header, is_customer_name_column, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_salad_email_blast, is_datagrid_viber_blast, is_hsbc_mobile_pair, is_salad_endo_pair, phone_column
 from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check
 
 PREVIEW_LIMIT = 500
@@ -162,6 +162,8 @@ def render_file_details(result, run, index):
                 st.caption("Account number, customer name and email are checked on the same SBF endorsement record (SALAD / PL). Agentcode and Collector staff assignments are not compared.")
             elif is_datagrid_pl_viber_blast(result.headers) and result.source.column.casefold() == "debtorid":
                 st.caption("Debtorid is matched to DataGrid Debtor ID; FullName and Phone must match Name and Last Called No. on the same database row. Staff and campaign fields are not checked.")
+            elif is_datagrid_balance_viber_blast(result.headers) and result.source.column.casefold() == "phone":
+                st.caption("Phone is matched to DataGrid Phone; FullName, OB and Level must match Name, OB and Level on the same database row. Monthly, Terms and Promo have no confirmed calculation rule and remain unchecked.")
             elif is_datagrid_viber_blast(result.headers) and result.source.column.casefold() == "phone":
                 st.caption("Phone is matched to DataGrid Last Called No.; FullName must match Name on the same database row. CHCode and campaign amounts are not checked.")
             elif not result.flow_stage_column and phone_column(result.headers):
@@ -255,13 +257,17 @@ def main():
                 "Header row": (str(info.header_row) if info and item.source.has_headers
                                else "No headers" if info else ""),
                 "Lookup column": item.source.column if info else "",
-                "Database lookup column": (item.source.database_column or prepared.database.column
+                "Database lookup column": (item.source.database_column
+                                           or (find_header(prepared.database_info.headers, "Phone")
+                                               if info and prepared.database_info and is_datagrid_balance_viber_blast(info.headers)
+                                               else prepared.database.column)
                                            if info and prepared.database else ""),
                 "Check": ("Detected field mappings" if item.inferred
                           else "SALAD email account details" if info and is_datagrid_salad_email_blast(info.headers)
                           else "Account number, name and email" if info and prepared.database_info
                           and is_salad_endo_pair(info.headers, prepared.database_info.headers, item.source.column, prepared.database.column)
                           else "Viber debtor ID, phone and name" if info and is_datagrid_pl_viber_blast(info.headers)
+                          else "Viber phone, name, balance and level" if info and is_datagrid_balance_viber_blast(info.headers)
                           else "Viber phone and name" if info and is_datagrid_viber_blast(info.headers)
                           else "Phone by CHCODE" if info and info.has_headers
                           and not find_header(info.headers, "FLOW_STAGE") and phone_column(info.headers)

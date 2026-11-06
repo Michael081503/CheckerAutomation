@@ -8,6 +8,7 @@ from test_cbs_pl import cbs_pl_account_uploads
 from test_sbf_pl_viber import BLAST_HEADERS as PL_HEADERS, pl_database, pl_row
 from test_salad_endo import endo_blast, endo_database, regular_database
 from test_sbf_salad_email import salad_email_pair
+from test_sbf_balance_viber import BLAST_HEADERS as BALANCE_HEADERS, balance_database, balance_row
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
 from test_web_checker import cbs_apd_uploads, cbs_pl_uploads, csv_upload, database_upload, datagrid_upload, email_blast_upload, hsbc_mobile_uploads, xlsx_upload
@@ -336,6 +337,26 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(len(coverage), 3)
         self.assertTrue(all(list(frame["Coverage"]).count("CHECKED") == 2 for frame in coverage))
         self.assertTrue(any("FullName must match Name on the same database row" in caption.value
+                            for caption in self.app.caption))
+        self.assertEqual(len(self.app.get("download_button")), 1)
+
+    def test_balance_viber_shows_actual_phone_lookup_and_four_checked_fields(self):
+        self.database = BrowserFile(balance_database())
+        self.files = [BrowserFile(csv_upload("future HIGH BAL.csv", [
+            BALANCE_HEADERS, balance_row(), balance_row(ob="999"),
+        ]))]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual((result.count("MATCHED"), result.count("DIFFERENT")), (1, 1))
+        self.assertEqual(result.database_match_column, "Phone")
+        detection = self.detection_rows().iloc[0]
+        self.assertEqual(detection["Lookup column"], "Phone")
+        self.assertEqual(detection["Database lookup column"], "Phone")
+        self.assertEqual(detection["Check"], "Viber phone, name, balance and level")
+        coverage = next(frame.value for frame in self.app.dataframe if "Coverage" in frame.value.columns)
+        self.assertEqual(list(coverage["Coverage"]).count("CHECKED"), 4)
+        self.assertTrue(any("Phone is matched to DataGrid Phone" in caption.value
                             for caption in self.app.caption))
         self.assertEqual(len(self.app.get("download_button")), 1)
 

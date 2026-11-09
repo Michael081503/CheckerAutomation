@@ -9,6 +9,7 @@ from test_sbf_pl_viber import BLAST_HEADERS as PL_HEADERS, pl_database, pl_row
 from test_salad_endo import endo_blast, endo_database, regular_database
 from test_sbf_salad_email import salad_email_pair
 from test_sbf_balance_viber import BLAST_HEADERS as BALANCE_HEADERS, balance_database, balance_row
+from test_multi_database import dual_database_uploads
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
 from test_web_checker import cbs_apd_uploads, cbs_pl_uploads, csv_upload, database_upload, datagrid_upload, email_blast_upload, hsbc_mobile_uploads, xlsx_upload
@@ -67,6 +68,35 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertTrue(self.app.button(key="run_check").disabled)
         self.assertTrue(any("Add a database and your files" in caption.value for caption in self.app.caption))
         self.assertEqual(len(self.app.get("download_button")), 0)
+
+    def test_multiple_databases_show_separate_results_and_invalidate_on_replacement(self):
+        databases, blast = dual_database_uploads(ml_changed=True)
+        self.database = [BrowserFile(database) for database in databases]
+        self.files = [BrowserFile(blast)]
+        self.run_check()
+        run = self.app.session_state["check_run"]
+        self.assertEqual([result.count("MATCHED") for result in run.results], [2, 1])
+        self.assertEqual(len(run.databases), 2)
+        self.assertEqual(len(self.app.get("download_button")), 1)
+        self.assertEqual(self.app.metric[0].label, "Database comparisons")
+        self.assertEqual(self.app.metric[1].label, "Rows matching all")
+        self.assertEqual(self.app.metric[1].value, "1")
+        self.assertTrue(any("Database: SALAD ML.xlsx" in caption.value for caption in self.app.caption))
+        self.app.selectbox(key="result_filter_1").select("DIFFERENT").run()
+        self.assertFalse(self.app.exception)
+        self.assertIn("check_run", self.app.session_state)
+        databases, _ = dual_database_uploads()
+        self.database = [BrowserFile(database) for database in databases]
+        self.app.run()
+        self.assertNotIn("check_run", self.app.session_state)
+
+    def test_invalid_second_database_blocks_checking(self):
+        from web_checker import Upload
+        self.database = [self.database, BrowserFile(Upload("bad.xlsx", b"invalid"))]
+        self.app.run()
+        self.assertFalse(self.app.exception)
+        self.assertTrue(self.app.button(key="run_check").disabled)
+        self.assertTrue(self.app.error)
 
     def test_salad_email_detects_fields_without_showing_static_instructions(self):
         database, upload = salad_email_pair()

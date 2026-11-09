@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 9
+COMPARISON_VERSION = 10
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -82,6 +82,7 @@ class FileResult:
     flow_stage_column: str = ""
     flow_stage: str = ""
     database_match_column: str = ""
+    database_source: Source | None = None
 
     @property
     def file_identifier(self) -> str:
@@ -179,6 +180,12 @@ def is_salad_endo_database(headers: Iterable) -> bool:
         _header_names(headers))
 
 
+def is_salad_ml_database(headers: Iterable) -> bool:
+    """SALAD master list; customer identity comes from its Old IC identifier."""
+    return {"uid code/old ic", "caseno", "caseaccountno", "casebaseaccountno",
+            "casecustomername", "casecustomeremail"}.issubset(_header_names(headers))
+
+
 def is_datagrid_email_blast(headers: Iterable) -> bool:
     """Recognize email-blast fields that have DataGrid counterparts."""
     names = _header_names(headers)
@@ -216,6 +223,8 @@ def match_column(headers: Iterable[str], database_headers: Iterable[str] | None 
     """Select the lookup column, using the database schema for account blasts."""
     headers = list(headers)
     database_headers = list(database_headers) if database_headers is not None else None
+    if is_salad_ml_database(headers):
+        return next(header for header in headers if header.strip().casefold() == "uid code/old ic")
     if is_datagrid_pl_viber_blast(headers):
         return next(header for header in headers if header.strip().casefold() == "debtorid")
     if is_datagrid_viber_blast(headers) or is_datagrid_balance_viber_blast(headers):
@@ -331,7 +340,7 @@ def _has_supported_header(values: Iterable) -> bool:
     identifier_layout = bool(names & set(CHCODE_ALIASES[1:])) and bool(
         names & {"flow_stage", "name", "email", "chname", "accountnumber"})
     return (_has_chcode(values) or bool(phone_column(names)) or is_datagrid_database(values)
-            or is_datagrid_email_blast(values) or is_salad_endo_database(values)
+            or is_datagrid_email_blast(values) or is_salad_endo_database(values) or is_salad_ml_database(values)
             or {"email", "chname", "accountnumber"}.issubset(names) or identifier_layout)
 
 
@@ -348,7 +357,12 @@ def _is_datagrid_total(headers: list[str], records: list[tuple[int, tuple]]) -> 
     populated = {index for index, value in enumerate(footer)
                  if value is not None and str(value).strip()}
     count_position = names.index("no")
-    amounts = populated - {count_position}
+    # This export can put a cached lookup error in its contact total cell.
+    # Only allow that marker on a footer whose count and every sum reconcile.
+    error_cells = {index for index in populated
+                   if names[index] in {"email", "phone", "last called no."}
+                   and str(footer[index]).strip() == "#N/A"}
+    amounts = populated - {count_position} - error_cells
     if (count_position not in populated or not amounts
             or any(names[index] not in amount_columns for index in amounts)):
         return False
@@ -411,6 +425,7 @@ def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
     declared_width = len(headers)
     while headers and not headers[-1]:
         headers.pop()
+    allow_unnamed_headers = allow_unnamed_headers or is_salad_ml_database(headers)
     if allow_unnamed_headers and headers:
         # Infer only visible column labels, never values or column positions.
         # Buffering also gives headers-only inspection the same actual width as
@@ -521,6 +536,12 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
                      file_key: str, database_key: str) -> list[ColumnMapping]:
     """Direct header matches and explicit HSBC export aliases; never infer by position."""
     database_names = {name.casefold(): name for name in database_headers}
+    if is_salad_ml_database(database_headers) and database_key.casefold() == "uid code/old ic":
+        fields = {"primary_key": database_key, "indexone_uid": database_key,
+                  "email": "caseCustomerEmail", "chname": "caseCustomerName",
+                  "accountnumber": "caseAccountNo", "financingnumber": "caseBaseAccountNo"}
+        return [ColumnMapping(name, database_names[fields[name.casefold()].casefold()])
+                for name in file_headers if name.casefold() in fields]
     if is_datagrid_balance_viber_pair(file_headers, database_headers, file_key, database_key):
         fields = {"fullname": ("Name", "Text"), "phone": ("Phone", "Phone"),
                   "ob": ("OB", "Number"), "level": ("Level", "Text")}
@@ -1061,7 +1082,8 @@ def check_files(database: Source, files: list[Source], options: Options,
     return results
 
 
-def export_report(path: Path, database: Source, options: Options, results: list[FileResult]) -> None:
+def export_report(path: Path, database: Source, options: Options, results: list[FileResult],
+                  *, databases: tuple[Source, ...] = ()) -> None:
     from openpyxl.cell import WriteOnlyCell
 
     book = Workbook(write_only=True)
@@ -1076,9 +1098,9 @@ def export_report(path: Path, database: Source, options: Options, results: list[
         sheet.append(cells)
 
     summary = book.create_sheet("Summary")
-    append(summary, ["Database", str(database.path)])
-    append(summary, ["Database sheet", database.sheet])
-    append(summary, ["Database match column", database.column])
+    append(summary, ["Database", "; ".join(str(item.path) for item in databases) if databases else str(database.path)])
+    append(summary, ["Database sheet", "See each comparison below" if len(databases) > 1 else database.sheet])
+    append(summary, ["Database match column", "See each comparison below" if len(databases) > 1 else database.column])
     append(summary, ["Ignore letter case", str(options.ignore_case)])
     append(summary, ["Trim outer spaces", str(options.trim_spaces)])
     append(summary, ["Created", datetime.now().isoformat(timespec="seconds")])
@@ -1086,8 +1108,9 @@ def export_report(path: Path, database: Source, options: Options, results: list[
     append(summary, ["File", "Full path", "Sheet", "Match column", "Rows", "Matched rows", "Not found", "Blank key", "Error", "Report sheet",
                      "Comparison", "Different rows", "Extra rows", "Missing database rows", "Missing columns", "Extra columns", "Differences sheet", "Missing rows sheet",
                      "Scope", "Fields checked", "Unchecked file columns", "Mappings sheet",
-                     "FLOW_STAGE", "File identifier column", "Database match column"])
+                     "FLOW_STAGE", "File identifier column", "Database match column", "Database", "Database sheet"])
     for index, result in enumerate(results, 1):
+        row_database = result.database_source or database
         name = f"File {index:03d}"
         append(summary, [result.source.path.name, str(result.source.path), result.source.sheet,
                          result.source.column, len(result.records), result.count("MATCHED"),
@@ -1098,7 +1121,8 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                          result.comparison_mode,
                          "; ".join(f"{item.file_column} → {item.database_column} ({item.comparison})" for item in result.mappings),
                          ", ".join(result.ignored_columns), f"Mappings {index:03d}" if result.comparison_mode == "Uploaded rows" else "",
-                         result.flow_stage, result.flow_stage_column, result.database_match_column or database.column])
+                         result.flow_stage, result.flow_stage_column, result.database_match_column or row_database.column,
+                         str(row_database.path), row_database.sheet])
         detail = book.create_sheet(name)
         detail.freeze_panes = "D2"
         append(detail, ["Source row", "Result", "Database row(s)", *result.headers])
@@ -1119,7 +1143,7 @@ def export_report(path: Path, database: Source, options: Options, results: list[
             for header in result.headers:
                 item = mapped.get(header)
                 if header == result.flow_stage_column:
-                    lookup_column = result.database_match_column or database.column
+                    lookup_column = result.database_match_column or row_database.column
                     append(mapping_sheet, [header, "", "", "FILE IDENTIFIER",
                                            f"Labels the file; row data is compared against database records by {lookup_column}"])
                 elif item is None:
@@ -1178,6 +1202,30 @@ def export_report(path: Path, database: Source, options: Options, results: list[
             append(missing, ["Database row", *result.database_headers])
             for number, values in result.missing_rows:
                 append(missing, [number, *values])
+    if len(databases) > 1:
+        file_count = len(results) // len(databases)
+        for index in range(file_count):
+            comparisons = [results[db_index * file_count + index] for db_index in range(len(databases))]
+            combined = book.create_sheet(f"Combined {index + 1:03d}")
+            combined.freeze_panes = "C2"
+            original = next((item for item in comparisons if item.records), comparisons[0])
+            append(combined, ["Source row", "Overall result",
+                              *[label for db_index, item in enumerate(databases, 1)
+                                for label in (f"{db_index}. {item.path.name}: result", f"{db_index}. {item.path.name}: database row")],
+                              *original.headers])
+            records = [{row[0]: row for row in item.records} for item in comparisons]
+            row_numbers = sorted({number for record_map in records for number in record_map})
+            for number in row_numbers:
+                statuses = ["ERROR" if item.error or number not in record_map else record_map[number][1]
+                            for item, record_map in zip(comparisons, records)]
+                overall = "MATCHED" if all(status == "MATCHED" for status in statuses) else "NEEDS REVIEW"
+                values = next(record_map[number][3] for record_map in records if number in record_map)
+                append(combined, [number, overall,
+                                  *[value for status, record_map in zip(statuses, records)
+                                    for value in (status, record_map[number][2] if number in record_map else "")], *values])
+            for db_index, item in enumerate(comparisons, 1):
+                if item.error:
+                    append(combined, ["ERROR", f"{db_index}. {databases[db_index - 1].path.name}: {item.error}"])
     summary.freeze_panes = "A9"
     # Save beside the destination first, then replace atomically.
     import os

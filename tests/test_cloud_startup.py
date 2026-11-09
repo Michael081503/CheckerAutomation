@@ -95,8 +95,8 @@ class CloudStartupTests(unittest.TestCase):
                 run = app.session_state["check_run"]
                 assert run.results[0].database_match_column == "Debtor ID"
                 assert run.results[0].count("MATCHED") == 1
-                assert web_checker.AUTO_DETECTION_VERSION == 17
-                assert checker.COMPARISON_VERSION == 9
+                assert web_checker.AUTO_DETECTION_VERSION == 18
+                assert checker.COMPARISON_VERSION == 10
                 assert callable(checker.is_salad_endo_pair)
 
                 # Healthy modules and the completed result survive normal reruns.

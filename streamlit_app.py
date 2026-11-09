@@ -13,19 +13,19 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 9)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 10)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 17:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 18:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
-from checker import Options, find_header, is_customer_name_column, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_salad_email_blast, is_datagrid_viber_blast, is_hsbc_mobile_pair, is_salad_endo_pair, phone_column
-from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check
+from checker import Options, find_header, is_customer_name_column, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_salad_email_blast, is_datagrid_viber_blast, is_hsbc_mobile_pair, is_salad_endo_pair, is_salad_ml_database, phone_column
+from web_checker import AUTO_DETECTION_VERSION, Upload, configuration_signature, prepare_uploaded_check, run_prepared_check, run_prepared_checks
 
 PREVIEW_LIMIT = 500
 PASSED = {"EXACT MATCH", "MAPPED ROWS MATCH", "SAME ROWS"}
@@ -81,6 +81,8 @@ def apply_style():
 
 def render_file_details(result, run, index):
     st.caption(result.source.path.name)
+    if result.database_source:
+        st.caption(f"Database: {result.database_source.path.name} - {result.database_source.sheet}")
     if result.error:
         st.error(result.error)
         return
@@ -158,6 +160,8 @@ def render_file_details(result, run, index):
                 st.caption(f"All mapped fields are compared on the same database record using {result.source.column} → {result.database_match_column}.")
                 if any(item.comparison == "Phone" for item in result.mappings):
                     st.caption("Phone values are checked against the detected database column, which may have an unexpected header. Review the field mappings below.")
+            elif is_salad_ml_database(result.database_headers):
+                st.caption("Identifiers, account number, financing number, customer name and email are checked on the same SALAD master list record. Staff assignments and last4 have no confirmed mapping and remain unchecked.")
             elif is_salad_endo_pair(result.headers, result.database_headers, result.source.column, result.database_match_column):
                 st.caption("Account number, customer name and email are checked on the same SBF endorsement record (SALAD / PL). Agentcode and Collector staff assignments are not compared.")
             elif is_datagrid_pl_viber_blast(result.headers) and result.source.column.casefold() == "debtorid":
@@ -176,6 +180,7 @@ def render_results(run):
     results = run.results
     review_count = sum(result.verdict not in PASSED for result in results)
     matched = sum(result.count("MATCHED") for result in results)
+    multiple_databases = len(run.databases) > 1
     heading, download = st.columns([2, 1], vertical_alignment="center")
     with heading:
         st.subheader("Check results")
@@ -184,64 +189,35 @@ def render_results(run):
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            key="download_report", type="secondary", on_click="ignore", width="stretch")
     if review_count:
-        st.warning(f"{review_count} of {len(results)} file(s) need review. Open a result below to see the issues.")
+        noun = "database comparisons" if multiple_databases else "file(s)"
+        st.warning(f"{review_count} of {len(results)} {noun} need review. Open a result below to see the issues.")
     else:
         st.success("All files match the database across the compared fields.")
     columns = st.columns(3)
-    for column, label, value in zip(columns, ["Files checked", "Rows matched", "Files to review"],
-                                    [len(results), matched, review_count]):
+    labels = (["Database comparisons", "Rows matching all", "Comparisons to review"] if multiple_databases
+              else ["Files checked", "Rows matched", "Files to review"])
+    for column, label, value in zip(columns, labels,
+                                    [len(results), run.matched_in_all if multiple_databases else matched, review_count]):
         column.metric(label, f"{value:,}")
+    if multiple_databases:
+        st.caption("Each file is checked against every database. A row passes overall only when it matches all databases. The Excel report includes combined row results and separate differences for each database.")
     for index, result in enumerate(results):
         status = ("Mapped fields match" if result.verdict == "MAPPED ROWS MATCH" else
                   "Exact match" if result.verdict in PASSED else "File error" if result.error else "Review needed")
         stage = result.file_identifier
         label = f"{stage} · {status}"
+        if multiple_databases:
+            label = f"{result.database_source.path.name} · {label}"
         if not result.error:
             label += f" · {result.count('MATCHED'):,}/{len(result.records):,} rows matched"
         with st.expander(label, expanded=False, icon=":material/check_circle:" if result.verdict in PASSED else ":material/error_outline:"):
             render_file_details(result, run, index)
 
 
-def main():
-    st.set_page_config(page_title="File Checker", page_icon=":material/fact_check:", layout="wide", initial_sidebar_state="collapsed")
-    apply_style()
-    title, restart = st.columns([4, 1], vertical_alignment="center")
-    with title:
-        st.title("File checker")
-    with restart:
-        st.button("Start over", on_click=clear_session, key="clear_session", type="tertiary", width="stretch")
-    epoch = st.session_state.get("upload_epoch", 0)
-    left, right = st.columns(2)
-    with left:
-        with st.container(border=True, key="upload_database_card"):
-            st.subheader("1. Add your database")
-            database_file = st.file_uploader("Database file", type=["xlsx", "xlsm", "csv"],
-                                             key=f"database_upload_{epoch}", label_visibility="collapsed")
-    with right:
-        with st.container(border=True, key="upload_files_card"):
-            st.subheader("2. Add files to check")
-            uploaded_files = st.file_uploader("Files to check", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True,
-                                              key=f"files_upload_{epoch}", label_visibility="collapsed")
-
-    database_upload = Upload(database_file.name, database_file.getvalue()) if database_file is not None else None
-    file_uploads = [Upload(file.name, file.getvalue()) for file in uploaded_files]
-    current_inputs = (AUTO_DETECTION_VERSION, database_upload.fingerprint if database_upload else None,
-                      tuple(upload.fingerprint for upload in file_uploads))
-    if st.session_state.get("input_signature") != current_inputs:
-        reset_results()
-        st.session_state.pop("preparation", None)
-        st.session_state.input_signature = current_inputs
-
-    prepared = None
-    if database_upload:
-        if "preparation" not in st.session_state:
-            with st.spinner("Detecting worksheets, headers, and lookup columns..."):
-                st.session_state.preparation = prepare_uploaded_check(database_upload, file_uploads)
-        prepared = st.session_state.preparation
-
+def render_preparation(prepared, database_upload):
     if prepared and prepared.database_error:
         reset_results()
-        st.error(f"Database: {prepared.database_error}")
+        st.error(f"Database: {database_upload.name}: {prepared.database_error}")
     elif prepared and prepared.database_info:
         info = prepared.database_info
         worksheet = f"{info.sheet}, " if info.sheet else ""
@@ -252,6 +228,7 @@ def main():
         for item in prepared.files:
             info = item.inspection
             summary.append({
+                "Database": database_upload.name,
                 "File": item.source.upload.name,
                 "Worksheet": item.source.sheet,
                 "Header row": (str(info.header_row) if info and item.source.has_headers
@@ -263,6 +240,7 @@ def main():
                                                else prepared.database.column)
                                            if info and prepared.database else ""),
                 "Check": ("Detected field mappings" if item.inferred
+                          else "SALAD master list account details" if prepared.database_info and is_salad_ml_database(prepared.database_info.headers)
                           else "SALAD email account details" if info and is_datagrid_salad_email_blast(info.headers)
                           else "Account number, name and email" if info and prepared.database_info
                           and is_salad_endo_pair(info.headers, prepared.database_info.headers, item.source.column, prepared.database.column)
@@ -289,15 +267,64 @@ def main():
             ready_count = len(prepared.files) - file_errors
             st.caption(f"{ready_count} file(s) ready to check.")
 
-    ready = bool(prepared and prepared.database and not prepared.database_error and prepared.files)
-    if database_upload is None:
+
+def main():
+    st.set_page_config(page_title="File Checker", page_icon=":material/fact_check:", layout="wide", initial_sidebar_state="collapsed")
+    apply_style()
+    title, restart = st.columns([4, 1], vertical_alignment="center")
+    with title:
+        st.title("File checker")
+    with restart:
+        st.button("Start over", on_click=clear_session, key="clear_session", type="tertiary", width="stretch")
+    epoch = st.session_state.get("upload_epoch", 0)
+    left, right = st.columns(2)
+    with left:
+        with st.container(border=True, key="upload_database_card"):
+            st.subheader("1. Add your databases")
+            database_files = st.file_uploader("Database files", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True,
+                                             key=f"database_upload_{epoch}", label_visibility="collapsed")
+    with right:
+        with st.container(border=True, key="upload_files_card"):
+            st.subheader("2. Add files to check")
+            uploaded_files = st.file_uploader("Files to check", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True,
+                                              key=f"files_upload_{epoch}", label_visibility="collapsed")
+
+    # Accept a single file object as well as Streamlit's multiple-upload list.
+    if database_files is None:
+        database_files = []
+    elif not isinstance(database_files, (list, tuple)):
+        database_files = [database_files]
+    database_uploads = [Upload(file.name, file.getvalue()) for file in database_files]
+    file_uploads = [Upload(file.name, file.getvalue()) for file in uploaded_files]
+    current_inputs = (AUTO_DETECTION_VERSION, tuple(upload.fingerprint for upload in database_uploads),
+                      tuple(upload.fingerprint for upload in file_uploads))
+    if st.session_state.get("input_signature") != current_inputs:
+        reset_results()
+        st.session_state.pop("preparation", None)
+        st.session_state.input_signature = current_inputs
+
+    preparations = []
+    if database_uploads:
+        if "preparation" not in st.session_state:
+            with st.spinner("Detecting worksheets, headers, and lookup columns..."):
+                st.session_state.preparation = [prepare_uploaded_check(database, file_uploads)
+                                                for database in database_uploads]
+        preparations = st.session_state.preparation
+
+    for database_upload, prepared in zip(database_uploads, preparations):
+        render_preparation(prepared, database_upload)
+
+    ready = bool(preparations and file_uploads and all(
+        item.database and not item.database_error for item in preparations))
+    if not database_uploads:
         st.caption("Add a database and your files to get started. Excel and CSV are supported.")
-    elif prepared and not prepared.database_error and not prepared.files:
+    elif preparations and not file_uploads:
         st.caption("Add at least one file to check.")
 
     options = Options(ignore_case=True, trim_spaces=True, mapped_fields=True,
                       require_flow_stage=True, allow_missing_flow_stage=True)
-    signature = configuration_signature(prepared.database, [item.source for item in prepared.files], options) if ready else None
+    signature = tuple(configuration_signature(check.database, [item.source for item in check.files], options)
+                      for check in preparations) if ready else None
     if st.session_state.get("check_run") and st.session_state.get("check_signature") != signature:
         reset_results()
     if st.button("3. Check files", type="primary", key="run_check", disabled=not ready, width="stretch"):
@@ -309,7 +336,8 @@ def main():
 
         try:
             with st.spinner("Checking your files..."):
-                st.session_state.check_run = run_prepared_check(prepared, update)
+                st.session_state.check_run = (run_prepared_check(preparations[0], update) if len(preparations) == 1
+                                              else run_prepared_checks(preparations, update))
                 st.session_state.check_signature = signature
         except Exception as error:
             st.error(f"Unable to complete the check: {error}")

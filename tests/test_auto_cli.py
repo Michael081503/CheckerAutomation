@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 
 from scripts.check_files import main
 from web_checker import run_prepared_check
+from test_multi_database import dual_database_uploads
 
 
 class AutomaticCommandLineTests(unittest.TestCase):
@@ -126,6 +127,42 @@ class AutomaticCommandLineTests(unittest.TestCase):
         self.assertEqual(stopped.exception.code, 2)
         self.assertIn("Database:", stderr.getvalue())
         self.assertFalse(self.output.exists())
+
+    def test_auto_multiple_databases_write_one_combined_report_and_preserve_inputs(self):
+        databases, blast = dual_database_uploads(ml_changed=True)
+        paths = []
+        for upload in [*databases, blast]:
+            path = self.folder / upload.name
+            path.write_bytes(upload.data)
+            paths.append(path)
+        arguments = ["check_files.py", "--auto", "--database", *map(str, paths[:2]),
+                     "--files", str(paths[2]), "--output", str(self.output)]
+        stdout = io.StringIO()
+        with patch.object(sys, "argv", arguments), redirect_stdout(stdout):
+            self.assertEqual(main(), 0)
+        results = [json.loads(line) for line in stdout.getvalue().splitlines() if line.startswith("{")]
+        self.assertEqual([result["database"] for result in results], [db.name for db in databases])
+        self.assertEqual([result["matched"] for result in results], [2, 1])
+        book = load_workbook(self.output, read_only=True, data_only=True)
+        try:
+            self.assertIn("Combined 001", book.sheetnames)
+        finally:
+            book.close()
+        for path, upload in zip(paths, [*databases, blast]):
+            self.assertEqual(path.read_bytes(), upload.data)
+
+    def test_multiple_databases_cannot_overwrite_second_database_or_use_manual_mode(self):
+        second = self.csv("second.csv", [["CHCODE", "Name"], ["00123", "Alice Smith"]])
+        for auto, output in ((True, second), (False, self.output)):
+            arguments = ["check_files.py", "--database", str(self.database), str(second),
+                         "--files", str(self.target), "--output", str(output)]
+            if auto:
+                arguments.append("--auto")
+            original = second.read_bytes()
+            with patch.object(sys, "argv", arguments), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main()
+            self.assertEqual(second.read_bytes(), original)
+            self.assertFalse(self.output.exists())
 
 
 if __name__ == "__main__":

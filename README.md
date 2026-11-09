@@ -1,8 +1,38 @@
 ﻿# CHCODE Database Checker
 
-A Streamlit app for validating rows in multiple Excel or CSV files against a database workbook. Upload your database and files, review the detected layout, and click **Check files**. The app automatically detects headers, finds the lookup column, compares supported fields, and provides an Excel report download. It supports PARKED and LEGACY assignment templates, unfamiliar exports with reliable account identifiers, CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, SALAD and PL endorsement email blasts, PL and SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
+A Streamlit app for validating rows in Excel or CSV files against one or more databases. Upload your databases and files, review the detected layout, and click **Check files**. Every file is checked independently against every database. The app automatically detects headers, finds the lookup column, compares supported fields, and provides one Excel report download. It supports SALAD master lists, PARKED and LEGACY assignment templates, unfamiliar exports with reliable account identifiers, CHCODE campaign files, HSBC mobile blasts, DataGrid email blasts, SALAD and PL endorsement email blasts, PL and SALAD Viber blasts, and files without headers. It is prepared for Streamlit Community Cloud.
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
+
+## DataGrid and SALAD ML together
+
+Add both `DataGrid(1).xlsx` and `SALAD ML.xlsx` under **Add your databases**. Add `09-11-26 SBF SALAD EMAIL BLAST NEGRES.csv` under **Add files to check**, then click **Check files**. Future exports and renamed files with the same headers work automatically. A single database can still be checked on its own.
+
+The campaign is checked against each database separately, using one lookup column for the whole file. When both identifiers are identical, `primary_key` is used for lookup and both identifiers are compared. All six mapped values must match one customer record within each database, including when an identifier appears more than once:
+
+| CSV column | DataGrid column | SALAD ML column |
+| --- | --- | --- |
+| `primary_key`, `indexone_uid` | `Old I.C.` | `UID Code/Old IC` |
+| `accountnumber` | `Account No.` | `caseAccountNo` |
+| `financingnumber` | `Financing/Card No.` | `caseBaseAccountNo` |
+| `chname` | `Name` | `caseCustomerName` |
+| `email` | `Email` | `caseCustomerEmail` |
+
+Identifiers and account numbers preserve leading zeros. Existing customer-name comparison rules apply. `cc`, `bcc`, `agentcode`, `agentname`, and `last4` remain **NOT CHECKED** because there is no confirmed mapping for these fields in these databases. An unchecked field is not counted as a match.
+
+The app labels each comparison with its database. The report contains a **Summary** with database names and lookup columns, separate row results, differences and field mappings for every database/file pair, and a **Combined** worksheet for each campaign. A combined row is **MATCHED** only if it passes every database; a missing identifier, differing field or failed comparison keeps it in review. A match in one database cannot override an issue in another. Invalid databases block the run until corrected.
+
+SALAD ML's unnamed export column is retained without shifting the named columns. DataGrid's final count-and-sums footer is excluded only when its count and all populated totals reconcile; the footer may contain `#N/A` in a contact cell. Customer rows with blank identifiers still cause an error.
+
+The November 9, 2026 input has **16,056 campaign rows**. All 16,056 match DataGrid; **15,920 match SALAD ML and 136 have customer-name differences**. There are no missing or blank campaign identifiers. The combined result is 15,920 passing rows and 136 needing review. The report is `reports/SBF_SALAD_NEGRES_both_databases_2026-11-09.xlsx`. Source files are read without modification.
+
+Run the same automation locally:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database "..\AUTOCHECKER\DataGrid(1).xlsx" "..\AUTOCHECKER\SALAD ML.xlsx" --files "..\AUTOCHECKER\09-11-26 SBF SALAD EMAIL BLAST NEGRES.csv" --output "reports/SBF_SALAD_NEGRES_both_databases_2026-11-09.xlsx"
+```
+
+Multiple databases require `--auto`. The output cannot overwrite any database or campaign input. Browser uploads and automatic CLI runs use the same checker and report format.
 
 ## SBF HIGH / LOW BAL Viber blasts with DataGrid
 
@@ -112,10 +142,10 @@ Uploaded data is processed on the app server. Each browser session keeps its own
 
 ## Check your files
 
-1. Add the database `.xlsx`, `.xlsm`, or `.csv` file in **Add your database**.
+1. Add one or more database `.xlsx`, `.xlsm`, or `.csv` files in **Add your databases**.
 2. Add multiple files in **Add files to check**. Excel and CSV files can be mixed, including files with and without headers.
 3. Review the detection summary for each file's worksheet, header row, lookup column, and status. The database needs a `CHCODE`, `primary_key`, or `indexone_uid` header, supported DataGrid or endorsement headers, or a complete, unique account identifier for automatic inference. If a workbook has multiple supported worksheets, save the intended worksheet as a separate file and upload it.
-4. Click **Check files** to compare your uploaded rows against the database; smaller campaign subsets are supported.
+4. Click **Check files** to compare your uploaded rows against every database; smaller campaign subsets are supported.
 5. Read the compact results, then expand a file to see its **Issues**, **Rows**, or **Fields checked**. Row previews default to entries needing review when issues exist.
 6. Click **Download Excel report** for every original row, changed value, and field mapping.
 

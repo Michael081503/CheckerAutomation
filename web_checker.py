@@ -15,11 +15,11 @@ from typing import Callable
 
 from checker import (
     CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, check_files, chcode_columns, export_report,
-    find_header, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, match_column, normalize, phone_column, read_table, sheet_names,
+    find_header, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, is_salad_ml_database, match_column, normalize, phone_column, read_table, sheet_names,
 )
 from auto_match import database_key_candidates, has_identifier_header, infer_layout, is_assignment_template
 
-AUTO_DETECTION_VERSION = 17
+AUTO_DETECTION_VERSION = 18
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,20 @@ class CheckRun:
     options: Options
     results: list[FileResult]
     report: bytes
+    databases: tuple[Source, ...] = ()
+
+    @property
+    def matched_in_all(self) -> int:
+        """Count each source row once, requiring success in every database."""
+        if len(self.databases) <= 1:
+            return sum(result.count("MATCHED") for result in self.results if not result.error)
+        file_count = len(self.results) // len(self.databases)
+        matched = 0
+        for index in range(file_count):
+            sets = [{row[0] for row in result.records if row[1] == "MATCHED"} if not result.error else set()
+                    for result in self.results[index::file_count]]
+            matched += len(set.intersection(*sets))
+        return matched
 
 
 def clean_filename(name: str) -> str:
@@ -136,7 +150,10 @@ def _key_column(table: Table, database_keys: set[str], database_headers=()) -> t
         selected = tied[0]
     else:
         selected = preferred if preferred in tied else tied[0]
-    return selected, f"{selected}: {scores[selected]:,} of {len(table.rows):,} rows found in the database"
+    note = f"{selected}: {scores[selected]:,} of {len(table.rows):,} rows found in the database"
+    if is_salad_ml_database(database_headers):
+        note += "; SALAD master list: identifiers, account, financing number, name and email are checked on the same UID Code/Old IC record"
+    return selected, note
 
 
 def _detect_file_table(path: Path, sheet: str, database: Table,
@@ -301,6 +318,23 @@ def run_prepared_check(prepared: PreparedCheck,
                                       allow_missing_flow_stage=True), progress)
 
 
+def run_prepared_checks(prepared: list[PreparedCheck],
+                        progress: Callable[[int, int, FileResult], None] | None = None) -> CheckRun:
+    """Check every uploaded file against every database; no database is a fallback."""
+    if not prepared:
+        raise ValueError("Upload at least one database.")
+    for item in prepared:
+        if item.database is None or item.database_error:
+            raise ValueError(item.database_error or "Upload a valid database first.")
+    expected_files = [item.source.upload.fingerprint for item in prepared[0].files]
+    if any([item.source.upload.fingerprint for item in check.files] != expected_files for check in prepared):
+        raise ValueError("Each database must check the same files in the same order.")
+    return run_uploaded_checks([item.database for item in prepared],
+                               [[item.source for item in check.files] for check in prepared],
+                               Options(mapped_fields=True, require_flow_stage=True,
+                                       allow_missing_flow_stage=True), progress)
+
+
 def configuration_signature(database: UploadedSource, files: list[UploadedSource], options: Options) -> str:
     def describe(source):
         return {"upload": source.upload.fingerprint, "sheet": source.sheet, "column": source.column,
@@ -314,23 +348,45 @@ def configuration_signature(database: UploadedSource, files: list[UploadedSource
 
 def run_uploaded_check(database: UploadedSource, files: list[UploadedSource], options: Options,
                        progress: Callable[[int, int, FileResult], None] | None = None) -> CheckRun:
-    if not files:
+    return run_uploaded_checks([database], [files], options, progress)
+
+
+def run_uploaded_checks(databases: list[UploadedSource], file_groups: list[list[UploadedSource]], options: Options,
+                        progress: Callable[[int, int, FileResult], None] | None = None) -> CheckRun:
+    if not databases or len(databases) != len(file_groups):
+        raise ValueError("Provide a file group for each database.")
+    if any(not files for files in file_groups):
         raise ValueError("Upload at least one file to check.")
+    expected_files = [item.upload.fingerprint for item in file_groups[0]]
+    if any([item.upload.fingerprint for item in files] != expected_files for files in file_groups):
+        raise ValueError("Each database must check the same files in the same order.")
     with tempfile.TemporaryDirectory(prefix="chcode_check_") as folder:
         root = Path(folder)
-        database_source = Source(_write_upload(root / "database", database.upload), database.sheet, database.column,
-                                 has_headers=database.has_headers)
-        sources = [Source(_write_upload(root / "files" / str(index), source.upload), source.sheet, source.column,
-                          source.mappings, source.has_headers, source.detection_error,
-                          source.database_column, source.allow_unnamed_headers)
-                   for index, source in enumerate(files)]
-        results = check_files(database_source, sources, options, progress)
-        # The download describes client filenames, and remains valid after the
-        # temporary source files have been deleted.
-        displayed_database = replace(database_source, path=Path(clean_filename(database.upload.name)))
-        for result, source in zip(results, files):
-            result.source = replace(result.source, path=Path(clean_filename(source.upload.name)))
+        results = []
+        displayed_databases = []
+        total = sum(len(files) for files in file_groups)
+        for db_index, (database, files) in enumerate(zip(databases, file_groups)):
+            database_source = Source(_write_upload(root / "databases" / str(db_index), database.upload),
+                                     database.sheet, database.column, has_headers=database.has_headers,
+                                     allow_unnamed_headers=database.allow_unnamed_headers)
+            sources = [Source(_write_upload(root / "files" / str(db_index) / str(index), source.upload),
+                              source.sheet, source.column, source.mappings, source.has_headers,
+                              source.detection_error, source.database_column, source.allow_unnamed_headers)
+                       for index, source in enumerate(files)]
+            offset = len(results)
+
+            def update(index, _total, result):
+                if progress:
+                    progress(offset + index, total, result)
+
+            batch = check_files(database_source, sources, options, update)
+            displayed_database = replace(database_source, path=Path(clean_filename(database.upload.name)))
+            displayed_databases.append(displayed_database)
+            for result, source in zip(batch, files):
+                result.source = replace(result.source, path=Path(clean_filename(source.upload.name)))
+                result.database_source = displayed_database
+            results.extend(batch)
         report_path = root / "report" / "CHCODE_check_report.xlsx"
         report_path.parent.mkdir()
-        export_report(report_path, displayed_database, options, results)
-        return CheckRun(displayed_database, options, results, report_path.read_bytes())
+        export_report(report_path, displayed_databases[0], options, results, databases=tuple(displayed_databases))
+        return CheckRun(displayed_databases[0], options, results, report_path.read_bytes(), tuple(displayed_databases))

@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Callable
 
 from checker import (
-    CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, check_files, chcode_columns, export_report,
+    CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, balance_viber_database_fields, check_files, chcode_columns, export_report,
     find_header, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, is_salad_ml_database, match_column, normalize, phone_column, read_table, sheet_names,
 )
 from auto_match import database_key_candidates, has_identifier_header, infer_layout, is_assignment_template
 
-AUTO_DETECTION_VERSION = 18
+AUTO_DETECTION_VERSION = 19
 
 
 @dataclass(frozen=True)
@@ -128,6 +128,9 @@ def _key_column(table: Table, database_keys: set[str], database_headers=()) -> t
     if is_datagrid_pl_viber_blast(table.headers):
         return match_column(table.headers), "PL Viber layout detected; Debtorid matches DataGrid Debtor ID; FullName and Phone are checked against Name and Last Called No. on the same row"
     if is_datagrid_balance_viber_blast(table.headers):
+        fields = balance_viber_database_fields(database_headers)
+        if fields and "level" not in fields:
+            return match_column(table.headers), "Balance Viber layout detected; Phone matches DataGrid Last Called No.; FullName and OB are checked against Name and Balance on the same row. Level, Monthly, Terms, and Promo have no confirmed database mapping or calculation rule"
         return match_column(table.headers), "Balance Viber layout detected; Phone matches DataGrid Phone; FullName, OB, and Level are checked against Name, OB, and Level on the same row. Monthly, Terms, and Promo have no confirmed calculation rule"
     if is_datagrid_viber_blast(table.headers):
         return match_column(table.headers), "SALAD Viber layout detected; Phone matches DataGrid Last Called No. and FullName is checked against Name on the same row"

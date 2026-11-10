@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 10
+COMPARISON_VERSION = 11
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -296,16 +296,30 @@ def is_datagrid_pl_viber_pair(file_headers: Iterable[str], database_headers: Ite
             and database_key.strip().casefold() in {"old i.c.", "debtor id"})
 
 
+def balance_viber_database_fields(headers: Iterable[str]) -> dict[str, tuple[str, str]]:
+    """Fixed fields for each DataGrid balance export; never choose by value overlap."""
+    headers = list(headers)
+    names = _header_names(headers)
+    if is_datagrid_phone_database(headers):
+        if not {"ob", "level"}.issubset(names):
+            return {}
+        return {"fullname": ("Name", "Text"), "phone": ("Phone", "Phone"),
+                "ob": ("OB", "Number"), "level": ("Level", "Text")}
+    if is_datagrid_database(headers) and {"last called no.", "balance"}.issubset(names):
+        return {"fullname": ("Name", "Text"), "phone": ("Last Called No.", "Phone"),
+                "ob": ("Balance", "Number")}
+    return {}
+
+
 def is_datagrid_balance_viber_pair(file_headers: Iterable[str], database_headers: Iterable[str],
                                    file_key: str | None = None, database_key: str | None = None) -> bool:
     file_headers, database_headers = list(file_headers), list(database_headers)
     file_key = match_column(file_headers) if file_key is None else file_key
     database_key = match_column(database_headers) if database_key is None else database_key
-    return (is_datagrid_balance_viber_blast(file_headers)
-            and is_datagrid_phone_database(database_headers)
-            and {"ob", "level"}.issubset(_header_names(database_headers))
+    fields = balance_viber_database_fields(database_headers)
+    return (is_datagrid_balance_viber_blast(file_headers) and bool(fields)
             and file_key.strip().casefold() == "phone"
-            and database_key.strip().casefold() in {"old i.c.", "phone"})
+            and database_key.strip().casefold() in {"old i.c.", fields["phone"][0].casefold()})
 
 
 def is_hsbc_mobile_pair(file_headers: Iterable[str], database_headers: Iterable[str],
@@ -543,8 +557,7 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
         return [ColumnMapping(name, database_names[fields[name.casefold()].casefold()])
                 for name in file_headers if name.casefold() in fields]
     if is_datagrid_balance_viber_pair(file_headers, database_headers, file_key, database_key):
-        fields = {"fullname": ("Name", "Text"), "phone": ("Phone", "Phone"),
-                  "ob": ("OB", "Number"), "level": ("Level", "Text")}
+        fields = balance_viber_database_fields(database_headers)
         return [ColumnMapping(name, database_names[fields[name.casefold()][0].casefold()],
                               fields[name.casefold()][1])
                 for name in file_headers if name.casefold() in fields]
@@ -747,6 +760,8 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
                 result.unchecked_reasons[name] = "Campaign offer; no confirmed database mapping or calculation rule"
             elif name.casefold() in {"firstname", "lastname", "chcode"}:
                 result.unchecked_reasons[name] = "Staff assignment or template field; customer name is checked using FullName"
+            elif name.casefold() == "level":
+                result.unchecked_reasons[name] = "Campaign level; no confirmed database mapping or calculation rule in this DataGrid export"
     if is_datagrid_pair(target.headers, table.headers, source.column, database.column) and is_datagrid_salad_email_blast(target.headers):
         for name in result.ignored_columns:
             if name.casefold() in {"criteria", "monthly1", "monthly2", "monthly3", "amount1", "amount2", "amount3"}:
@@ -948,10 +963,11 @@ def check_files(database: Source, files: list[Source], options: Options,
                     and source.column.casefold() == "phone"):
                 balance_viber = is_datagrid_balance_viber_blast(target.headers)
                 if balance_viber and not is_datagrid_balance_viber_pair(target.headers, table.headers, source.column, database.column):
-                    raise ValueError("Balance Viber checks require a DataGrid database with Name, Old I.C., Account No., Phone, OB, and Level columns, using Old I.C. or Phone as its database key.")
+                    raise ValueError("Balance Viber checks require a DataGrid database with Name, Old I.C., Account No. and either Phone, OB, Level or Email, Last Called No., Balance. The database key must be Old I.C. or the profile's phone column.")
                 if not balance_viber and not is_datagrid_viber_pair(target.headers, table.headers, source.column, database.column):
                     raise ValueError("SALAD Viber checks require a DataGrid database with Name, Old I.C., Account No., Email, and Last Called No. columns, using Old I.C. or Last Called No. as its database key.")
-                database_phone = find_header(table.headers, "Phone" if balance_viber else "Last Called No.")
+                fields = balance_viber_database_fields(table.headers) if balance_viber else {}
+                database_phone = find_header(table.headers, fields["phone"][0] if balance_viber else "Last Called No.")
                 comparison_database = replace(database, column=database_phone)
                 result.database_match_column = database_phone
                 if database_phone not in viber_lookups:
@@ -1166,6 +1182,9 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                                 "Compares the value on the same caseAccountNo record; uses case and space options")
                     if item.comparison == "Phone" and item.file_column == result.source.column:
                         rule = "Finds database rows by phone; all mapped fields must match the same row. Philippine mobile formats +639 / 639 / 09 / 9 are equivalent; other values use text comparison"
+                    if is_datagrid_balance_viber_pair(result.headers, result.database_headers,
+                                                      result.source.column, result.database_match_column):
+                        rule += "; all checked values must match the same database row"
                     if is_datagrid_pl_viber_pair(result.headers, result.database_headers,
                                                  result.source.column, result.database_match_column):
                         if item.file_column == result.source.column:

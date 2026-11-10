@@ -4,6 +4,41 @@ A Streamlit app for validating rows in Excel or CSV files against one or more da
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
+## Viber discount batches with a standard DataGrid export
+
+Upload `DataGrid(1).xlsx` under **Add your databases**, add the eight `VIBER_discount_HIGH_BAL...` and `VIBER_discount_LOW_BAL...` CSVs under **Add files to check**, then click **Check files**. The checker recognizes the columns rather than dates, filenames, batch numbers, or filename row counts. Renamed files, future batches, reordered columns, extra campaign columns, and equivalent Excel exports work through the same automatic upload workflow.
+
+This DataGrid contains `Last Called No.` and `Balance` rather than `Phone`, `OB`, and `Level`. Its fixed mappings are:
+
+| File column | DataGrid column | Comparison |
+| --- | --- | --- |
+| `Phone` | `Last Called No.` | Phone; customer lookup |
+| `FullName` | `Name` | Customer name |
+| `OB` | `Balance` | Numeric; commas and equivalent decimals accepted |
+
+All three values must match the same database row. Equivalent Philippine mobile formats are accepted and leading zeros are preserved in the original values. A wrong customer name or balance produces **DIFFERENT**; an unknown phone produces **NOT FOUND** and a blank campaign phone produces **BLANK KEY**. Shared phone numbers cannot combine fields from different customer rows. The checker always uses `Last Called No.` and `Balance` for this export; it does not switch to `Email` or `Amount Referred` to make a value pass.
+
+`FirstName`, `LastName`, and `CHCode` are staff/template fields in this layout. `Monthly`, `Terms`, `Promo`, and `Level` have no confirmed database mapping or calculation rule and remain **NOT CHECKED**. The app and report disclose these seven unchecked fields. The other DataGrid export with `Phone`, `OB`, and `Level` retains its four established checks, described below.
+
+The supplied November 10, 2026 files contain **16,833 campaign rows**. **16,830 match the three supported fields; 3 have phones not found in `Last Called No.`**. There are no differing mapped values among found phones and no blank campaign phone keys. The affected source rows, including the header as row 1, are:
+
+| Campaign | Source rows needing review |
+| --- | --- |
+| LOW BAL, Level 1, Batch 1 (2,515 rows) | 482 |
+| LOW BAL, Level 5, Batch 1 (4,000 rows) | 2680, 3623 |
+
+The report is `reports/SBF_VIBER_discount_check_2026-11-10.xlsx`. All nine input files were verified unchanged using SHA-256 checksums. The report includes every original row, its result, field mappings, and unchecked-field explanations.
+
+Run the same automation locally:
+
+```powershell
+$inputFolder = Join-Path $env:USERPROFILE 'Downloads\AUTOCHECKER'
+$campaignFiles = @(Get-ChildItem -LiteralPath $inputFolder -Filter 'VIBER_discount*.csv' -File | ForEach-Object { $_.FullName })
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database (Join-Path $inputFolder 'DataGrid(1).xlsx') --files $campaignFiles --output 'reports/SBF_VIBER_discount_check_2026-11-10.xlsx'
+```
+
+Supported uploads are `.csv`, `.xlsx`, and `.xlsm`. Other layouts need a supported profile or reliable identifier evidence for automatic inference; unsupported or ambiguous data is flagged for attention. Fields without a confirmed mapping remain unchecked.
+
 ## DataGrid and SALAD ML together
 
 Add both `DataGrid(1).xlsx` and `SALAD ML.xlsx` under **Add your databases**. Add `09-11-26 SBF SALAD EMAIL BLAST NEGRES.csv` under **Add files to check**, then click **Check files**. Future exports and renamed files with the same headers work automatically. A single database can still be checked on its own.

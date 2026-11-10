@@ -9,6 +9,7 @@ from test_sbf_pl_viber import BLAST_HEADERS as PL_HEADERS, pl_database, pl_row
 from test_salad_endo import endo_blast, endo_database, regular_database
 from test_sbf_salad_email import salad_email_pair
 from test_sbf_balance_viber import BLAST_HEADERS as BALANCE_HEADERS, balance_database, balance_row
+from test_sbf_discount_viber import discount_database
 from test_multi_database import dual_database_uploads
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
@@ -115,6 +116,24 @@ class StreamlitAppTests(unittest.TestCase):
                         "SALAD and PL NEW ENDO email blasts use", "Uploads are processed in this session",
                         "Check your campaign files against your database"):
             self.assertNotIn(removed, captions)
+
+    def test_discount_viber_export_shows_actual_phone_balance_mapping_and_unchecked_level(self):
+        self.database = BrowserFile(discount_database())
+        self.files = [BrowserFile(csv_upload("future batch.csv", [
+            BALANCE_HEADERS, balance_row(), balance_row(phone="09199999999"),
+        ]))]
+        self.run_check()
+        detection = self.detection_rows().iloc[0]
+        self.assertEqual(detection["Database lookup column"], "Last Called No.")
+        self.assertEqual(detection["Check"], "Viber phone, name and balance")
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual((result.count("MATCHED"), result.count("NOT FOUND")), (1, 1))
+        coverage = next(frame.value for frame in self.app.dataframe if "Coverage" in frame.value.columns).set_index("File column")
+        self.assertEqual(coverage.loc["Phone", "Database column"], "Last Called No.")
+        self.assertEqual(coverage.loc["OB", "Database column"], "Balance")
+        self.assertEqual(coverage.loc["Level", "Coverage"], "NOT CHECKED")
+        self.assertEqual(list(coverage["Coverage"]).count("CHECKED"), 3)
+        self.assertEqual(len(self.app.get("download_button")), 1)
 
     def test_cbs_pl_buckets_pass_and_disclose_unused_legacy_identifier(self):
         database, files = cbs_pl_account_uploads()

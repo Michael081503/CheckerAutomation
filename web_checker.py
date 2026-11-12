@@ -15,11 +15,11 @@ from typing import Callable
 
 from checker import (
     CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, balance_viber_database_fields, check_files, chcode_columns, export_report,
-    find_header, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_salad_endo_database, is_salad_endo_pair, is_salad_ml_database, match_column, normalize, phone_column, read_table, sheet_names,
+    find_header, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_hsbc_sms_discount_blast, is_salad_endo_database, is_salad_endo_pair, is_salad_ml_database, match_column, normalize, phone_column, read_table, sheet_names,
 )
 from auto_match import database_key_candidates, has_identifier_header, infer_layout, is_assignment_template
 
-AUTO_DETECTION_VERSION = 19
+AUTO_DETECTION_VERSION = 20
 
 
 @dataclass(frozen=True)
@@ -134,6 +134,8 @@ def _key_column(table: Table, database_keys: set[str], database_headers=()) -> t
         return match_column(table.headers), "Balance Viber layout detected; Phone matches DataGrid Phone; FullName, OB, and Level are checked against Name, OB, and Level on the same row. Monthly, Terms, and Promo have no confirmed calculation rule"
     if is_datagrid_viber_blast(table.headers):
         return match_column(table.headers), "SALAD Viber layout detected; Phone matches DataGrid Last Called No. and FullName is checked against Name on the same row"
+    if is_hsbc_sms_discount_blast(table.headers):
+        return match_column(table.headers), "HSBC SMS discount layout detected; CHCODE identifies the customer; mobile, name, last name and product type are checked on the same database row. Discount and unnamed columns remain NOT CHECKED"
     chcode = find_header(table.headers, "CHCODE")
     if chcode:
         return chcode, "CHCODE header detected"

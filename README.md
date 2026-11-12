@@ -4,6 +4,31 @@ A Streamlit app for validating rows in Excel or CSV files against one or more da
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
+## HSBC SMS Credit Seeker and OffUs Payer discount blasts
+
+Upload `HSBC DB as of Nov 12, 2026.xlsx` under **Add your databases**, add both SMS blast workbooks under **Add files to check**, then click **Check files**. The checker detects this layout by headers, so future dates, renamed files, reordered columns and equivalent CSV exports work automatically. Each file is checked independently against the uploaded DB. No manual field mapping is needed.
+
+| SMS file column | DB column | Check |
+| --- | --- | --- |
+| `ChCode` | First `CHCODE` column | Customer lookup; leading zeros preserved |
+| `Mobile` | `Mobile phone` | Equivalent Philippine mobile formats accepted |
+| `ChName` | `Name` | Customer name |
+| `LastName` | `Last Name` | Existing HSBC rule ignores leading Mr./Ms., Mr. and Ms. titles; surname and suffixes remain checked |
+| `ProductType` | `PROD TYPE` | Credit Card = CARDS; Personal Loan = LOAN |
+
+All five fields must match the same DB row. A phone belonging to another account is **DIFFERENT**, even if it exists elsewhere in the DB. Repeated CHCODEs cannot combine values from different rows. Unknown CHCODEs are **NOT FOUND**, blank CHCODEs are **BLANK KEY**, and blank campaign mobile numbers need review. Missing required DB fields produce an error. The older `formatted mobile` layout remains supported.
+
+The supplied files also contain `discount` and populated columns G–I without headers. These are retained as `Unnamed column G`, `Unnamed column H` and `Unnamed column I`. The checker validates the supported customer fields and marks the other four fields **NOT CHECKED** in the interface and report. There is no confirmed discount field or calculation rule in the supplied DB, and unnamed helper values do not establish a mapping. Excel formulas are read using their saved values; external workbooks are not opened and formulas are not recalculated. Other extra campaign fields remain unchecked unless their mapping is supported.
+
+The supplied November 12, 2026 files contain **1,250 data rows**. Credit Seeker has **226 of 226 matching rows**. OffUs Payer has **1,020 of 1,024 matching rows** and **four mobile differences**, at source rows **386, 462, 707 and 954** (header is row 1). There are no missing or blank CHCODEs. These results cover the five mapped fields; they do not validate discount offers or campaign eligibility. The report is `reports/HSBC_SMS_discount_check_2026-11-12.xlsx`. SHA-256 checksums confirmed all three source workbooks were unchanged.
+
+Run the same automatic check locally:
+
+```powershell
+$inputFolder = Join-Path $env:USERPROFILE 'Downloads\MAKERCHECKER'
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database (Join-Path $inputFolder 'HSBC DB as of Nov 12, 2026.xlsx') --files (Join-Path $inputFolder '12-11-26 HSBC SMS BLAST Credit Seeker - With Discounts - Copy.xlsx') (Join-Path $inputFolder '12-11-26 HSBC SMS BLAST OffUs Payer - With Discounts - Copy.xlsx') --output 'reports/HSBC_SMS_discount_check_2026-11-12.xlsx'
+```
+
 ## Viber discount batches with a standard DataGrid export
 
 Upload `DataGrid(1).xlsx` under **Add your databases**, add the eight `VIBER_discount_HIGH_BAL...` and `VIBER_discount_LOW_BAL...` CSVs under **Add files to check**, then click **Check files**. The checker recognizes the columns rather than dates, filenames, batch numbers, or filename row counts. Renamed files, future batches, reordered columns, extra campaign columns, and equivalent Excel exports work through the same automatic upload workflow.

@@ -10,6 +10,7 @@ from test_salad_endo import endo_blast, endo_database, regular_database
 from test_sbf_salad_email import salad_email_pair
 from test_sbf_balance_viber import BLAST_HEADERS as BALANCE_HEADERS, balance_database, balance_row
 from test_sbf_discount_viber import discount_database
+from test_hsbc_sms_discount import ALICE as SMS_ALICE, sms_blast, sms_database
 from test_multi_database import dual_database_uploads
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
@@ -320,6 +321,24 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertTrue(all(result.source.column == "ChCode" for result in run.results))
         self.assertTrue(any("Phone numbers are compared with the database record for the same CHCODE" in caption.value
                             for caption in self.app.caption))
+        self.assertEqual(len(self.app.get("download_button")), 1)
+
+    def test_hsbc_sms_discount_blasts_check_supported_fields_and_disclose_unchecked_columns(self):
+        self.database = BrowserFile(sms_database())
+        self.files = [BrowserFile(sms_blast()),
+                      BrowserFile(sms_blast([["09189876543", *SMS_ALICE[1:]]], name="offus.xlsx"))]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        run = self.app.session_state["check_run"]
+        self.assertEqual([r.count("MATCHED") for r in run.results], [1, 0])
+        self.assertEqual([r.count("DIFFERENT") for r in run.results], [0, 1])
+        self.assertTrue(any("Discount and unnamed columns remain NOT CHECKED" in c.value for c in self.app.caption))
+        coverage_frames = [f.value.set_index("File column") for f in self.app.dataframe if "Coverage" in f.value.columns]
+        self.assertEqual(len(coverage_frames), 2)
+        for frame in coverage_frames:
+            self.assertEqual(frame.loc["Mobile", "Database column"], "Mobile phone")
+            self.assertEqual(frame.loc["discount", "Coverage"], "NOT CHECKED")
+            self.assertEqual(frame.loc["Unnamed column G", "Coverage"], "NOT CHECKED")
         self.assertEqual(len(self.app.get("download_button")), 1)
 
     def test_phone_upload_without_stage_shows_wrong_account_phone_and_blank_numbers(self):

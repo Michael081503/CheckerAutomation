@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 11
+COMPARISON_VERSION = 12
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -322,14 +322,25 @@ def is_datagrid_balance_viber_pair(file_headers: Iterable[str], database_headers
             and database_key.strip().casefold() in {"old i.c.", fields["phone"][0].casefold()})
 
 
+def is_hsbc_mobile_blast(headers: Iterable[str]) -> bool:
+    names = _header_names(headers)
+    return ({"chcode", "chname", "lastname", "producttype"}.issubset(names)
+            and bool(names & {"formatted mobile", "mobile"}))
+
+
+def is_hsbc_sms_discount_blast(headers: Iterable[str]) -> bool:
+    """Named customer fields identify the layout; unnamed helpers are not mappings."""
+    headers = list(headers)
+    return is_hsbc_mobile_blast(headers) and "discount" in _header_names(headers)
+
+
 def is_hsbc_mobile_pair(file_headers: Iterable[str], database_headers: Iterable[str],
                         file_key: str | None = None, database_key: str | None = None) -> bool:
     """Recognize the HSBC mobile blast and the database fields it validates."""
     file_headers, database_headers = list(file_headers), list(database_headers)
     file_key = match_column(file_headers) if file_key is None else file_key
     database_key = match_column(database_headers) if database_key is None else database_key
-    return ({"formatted mobile", "chcode", "chname", "lastname", "producttype"}.issubset(
-                _header_names(file_headers))
+    return (is_hsbc_mobile_blast(file_headers)
             and {"chcode", "mobile phone", "name", "last name", "prod type"}.issubset(
                 _header_names(database_headers))
             and file_key.strip().casefold() == "chcode"
@@ -439,7 +450,8 @@ def _table(path: Path, sheet: str, rows: Iterable, *, has_headers: bool = True,
     declared_width = len(headers)
     while headers and not headers[-1]:
         headers.pop()
-    allow_unnamed_headers = allow_unnamed_headers or is_salad_ml_database(headers)
+    allow_unnamed_headers = (allow_unnamed_headers or is_salad_ml_database(headers)
+                             or is_hsbc_sms_discount_blast(headers))
     if allow_unnamed_headers and headers:
         # Infer only visible column labels, never values or column positions.
         # Buffering also gives headers-only inspection the same actual width as
@@ -550,6 +562,16 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
                      file_key: str, database_key: str) -> list[ColumnMapping]:
     """Direct header matches and explicit HSBC export aliases; never infer by position."""
     database_names = {name.casefold(): name for name in database_headers}
+    if (is_hsbc_sms_discount_blast(file_headers)
+            and is_hsbc_mobile_pair(file_headers, database_headers, file_key, database_key)):
+        # Offers and unnamed helpers are deliberately excluded, even if their
+        # values happen to agree with another database field.
+        fields = {"chcode": (database_key, "Text"), "chname": ("Name", "Text"),
+                  "lastname": ("Last Name", "Text"), "producttype": ("PROD TYPE", "Product"),
+                  "mobile": ("Mobile phone", "Phone"), "formatted mobile": ("Mobile phone", "Phone")}
+        return [ColumnMapping(name, database_names[fields[name.casefold()][0].casefold()],
+                              fields[name.casefold()][1])
+                for name in file_headers if name.casefold() in fields]
     if is_salad_ml_database(database_headers) and database_key.casefold() == "uid code/old ic":
         fields = {"primary_key": database_key, "indexone_uid": database_key,
                   "email": "caseCustomerEmail", "chname": "caseCustomerName",
@@ -754,6 +776,12 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
     result.mappings = mappings
     result.ignored_columns = [name for name in target.headers if name not in {item.file_column for item in mappings}
                               and name != result.flow_stage_column]
+    if is_hsbc_sms_discount_blast(target.headers):
+        for name in result.ignored_columns:
+            if name.casefold() == "discount":
+                result.unchecked_reasons[name] = "Discount offer; no confirmed database field or approved calculation rule"
+            elif name.casefold().startswith("unnamed column "):
+                result.unchecked_reasons[name] = "Unnamed source column; no confirmed database mapping; original loaded value retained"
     if is_datagrid_balance_viber_blast(target.headers):
         for name in result.ignored_columns:
             if name.casefold() in {"monthly", "terms", "promo"}:
@@ -787,7 +815,8 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
                        and item.database_column == database.column)
     required_phone = (phone_column(target.headers) if (
         options.allow_missing_flow_stage and source.has_headers and not find_header(target.headers, "FLOW_STAGE")
-        or is_datagrid_pl_viber_pair(target.headers, table.headers, source.column, database.column)) else "")
+        or is_datagrid_pl_viber_pair(target.headers, table.headers, source.column, database.column)
+        or is_hsbc_sms_discount_blast(target.headers)) else "")
     phone_position = target.headers.index(required_phone) if required_phone else None
     database_signatures = {}
     exact = {}
@@ -904,6 +933,10 @@ def check_files(database: Source, files: list[Source], options: Options,
             if source.column not in target.headers:
                 raise ValueError(f"Match column '{source.column}' no longer exists.")
             comparison_database, comparison_lookup = database, lookup
+            if (options.mapped_fields and not source.database_column
+                    and is_hsbc_sms_discount_blast(target.headers)
+                    and not is_hsbc_mobile_pair(target.headers, table.headers, source.column, database.column)):
+                raise ValueError("HSBC SMS discount checks require CHCODE, Mobile phone, Name, Last Name and PROD TYPE in the database, using CHCODE for lookup.")
             if source.database_column:
                 if not options.mapped_fields:
                     raise ValueError("Per-file database lookup columns support uploaded-row checks only.")

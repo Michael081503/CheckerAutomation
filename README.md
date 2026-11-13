@@ -4,7 +4,9 @@ A Streamlit app for validating rows in Excel or CSV files against one or more da
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
-Results include a compact **File overview** beside **Issues across files**, with source row numbers and lookup values. Turn on **Screenshot view** next to the report download to hide uploads and detailed file cards and use more screen width at normal zoom. Turn it off to return to the full view; uploads, results, filters and the Excel report are preserved. The overview shows every file/database comparison and up to 12 issue entries, with an explicit count when more issues are available in the report.
+Results use the full browser width, with more room for long filenames in **File overview** beside **Issues across files**. Tables use readable text at normal zoom and stack on smaller screens. Turn on **Screenshot view** next to the report download to hide uploads and detailed file cards and reduce the outer margins further. Turn it off to return to the full view; uploads, results, filters and the Excel report are preserved. The overview shows every file/database comparison and up to 12 issue entries, with source row numbers, lookup values and an explicit count when more issues are available in the report.
+
+After checking, setup and detection explanations disappear. The overview shows each difference on separate **Your file** and **Database** lines, with long values wrapping and empty values labeled **(blank)**. Multiple differences in a row are separated for easier review, and issues stack into labeled cards on small screens. Field names, mappings, skipped-row information and full differences remain available in the per-file details and Excel report. Replacing an upload clears the results and restores the detection summary.
 
 ## Database rows with blank lookup values
 

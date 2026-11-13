@@ -211,8 +211,9 @@ class StreamlitAppTests(unittest.TestCase):
             self.assertIn(f"LEVEL 5 BATCH {number:02}.csv", overview)
         self.assertEqual(overview.count("NOT FOUND"), 6)
         self.assertEqual(overview.count("09199999999"), 6)
-        self.assertEqual(overview.count('<td class="result-number">3</td>'), 8)
-        self.assertIn("6 issue entries", overview)
+        self.assertEqual(overview.count('>3</td>'), 8)
+        self.assertNotIn("File # refers to the overview", overview)
+        self.assertNotIn("Results cover the mapped fields", overview)
 
     def test_compact_overview_escapes_uploaded_values_and_discloses_issue_limit(self):
         from streamlit_app import result_overview_html
@@ -220,10 +221,13 @@ class StreamlitAppTests(unittest.TestCase):
         run = self.app.session_state["check_run"]
         result = run.results[0]
         row, db_row, field, _, expected = result.differences[0]
-        result.differences[0] = (row, db_row, field, '<img src=x onerror="alert(1)">', expected)
+        result.differences[0] = (row, db_row, field, '<img src=x onerror="alert(1)">', None)
         overview = result_overview_html(run)
         self.assertIn("&lt;img", overview)
         self.assertNotIn("<img", overview)
+        self.assertNotIn(f"{field}:", overview)
+        self.assertIn('Your file</span><span class="result-value-text">&lt;img', overview)
+        self.assertIn('Database</span><span class="result-value-text">(blank)</span>', overview)
         limited = result_overview_html(run, issue_limit=0)
         self.assertIn("Showing 0 of 1 issue entries", limited)
         self.assertIn("Full details are in the Excel report", limited)

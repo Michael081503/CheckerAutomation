@@ -44,6 +44,11 @@ def text(value):
     return "" if value is None else str(value)
 
 
+def comparison_text(value):
+    value = text(value)
+    return value if value.strip() else "(blank)"
+
+
 def reset_results():
     st.session_state.pop("check_run", None)
     st.session_state.pop("check_signature", None)
@@ -53,7 +58,7 @@ def apply_style():
     st.markdown("""
 <style>
     :root {color-scheme: dark;}
-    .stMainBlockContainer {max-width: 1120px; padding-top: 2.5rem; padding-bottom: 3rem;}
+    .stMainBlockContainer {width: 100%; max-width: none; padding: 2.5rem 1.5rem 3rem;}
     h1 {font-size: 2.2rem !important; letter-spacing: -0.06rem;}
     h3 {font-size: 1.15rem !important;}
     .st-key-upload_database_card, .st-key-upload_files_card {
@@ -78,22 +83,37 @@ def apply_style():
         background: #1b283a; border-color: #35445b; color: #e4ecf7; border-radius: 10px;
     }
     [data-testid="stBaseButton-secondary"]:not(:disabled):hover {border-color: #2dd4bf; color: #5eead4;}
-    .result-overview {display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; margin: 8px 0 12px;}
-    .result-panel {min-width: 0; border: 1px solid #29374b; border-radius: 12px; overflow: hidden; background: #111a27;}
-    .result-panel h4 {font-size: 15px; margin: 0; padding: 12px 14px; background: #172334;}
-    .result-table {border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.35;}
-    .result-table th {padding: 9px 10px; color: #a6b7cc; font-size: 12px; text-align: left; font-weight: 600; background: #131e2c;}
+    .result-overview {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; margin: 8px 0 12px;}
+    .result-panel {min-width: 0; border: 1px solid #29374b; border-radius: 12px; overflow-x: auto; background: #111a27;}
+    .result-panel h4 {font-size: 16px; margin: 0; padding: 12px 14px; background: #172334;}
+    .result-table {border-collapse: collapse; width: 100%; font-size: 15px; line-height: 1.4;}
+    .result-table th {padding: 9px 10px; color: #a6b7cc; font-size: 13px; text-align: left; font-weight: 600; background: #131e2c;}
     .result-table td {padding: 9px 10px; border-top: 1px solid #243247; vertical-align: top; overflow-wrap: anywhere;}
-    .result-table .result-number, .result-table .result-key {white-space: nowrap; overflow-wrap: normal; font-variant-numeric: tabular-nums;}
+    .result-table .result-number {white-space: nowrap; overflow-wrap: normal; font-variant-numeric: tabular-nums;}
+    .result-table .result-key {font-variant-numeric: tabular-nums;}
+    .result-table .result-issue {overflow-wrap: normal;}
     .result-table .result-file {min-width: 120px;}
+    .result-table .result-detail {min-width: 180px;}
+    .result-difference + .result-difference {border-top: 1px solid #35445b; margin-top: 8px; padding-top: 8px;}
+    .result-value {display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: 8px;}
+    .result-value + .result-value {margin-top: 4px;}
+    .result-value-label {color: #a6b7cc; font-size: 12px; padding-top: 2px;}
+    .result-value-text {min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap;}
     .result-table small {display: block; color: #a6b7cc; font-size: 12px;}
-    .result-status {font-size: 11px; font-weight: 700; white-space: nowrap;}
+    .result-status {font-size: 12px; font-weight: 700; white-space: nowrap;}
     .result-status.pass {color: #5eead4;}
     .result-status.review {color: #fbbf24;}
     .result-status.error {color: #fda4af;}
     .result-note {padding: 10px 14px; margin: 0; color: #a6b7cc; font-size: 12px; line-height: 1.4;}
-    .result-context {color: #a6b7cc; font-size: 13px; margin: 6px 0;}
     @media (max-width: 1000px) {.result-overview {grid-template-columns: minmax(0, 1fr);}}
+    @media (max-width: 600px) {
+        .result-issues, .result-issues tbody {display: block;}
+        .result-issues thead {display: none;}
+        .result-issues tbody tr {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid #243247;}
+        .result-issues td {display: block; min-width: 0; border: 0;}
+        .result-issues td::before {content: attr(data-label); display: block; color: #a6b7cc; font-size: 12px; margin-bottom: 4px;}
+        .result-issues .result-detail {grid-column: 1 / -1; min-width: 0;}
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -101,7 +121,7 @@ def apply_style():
 def result_overview_html(run, issue_limit=12):
     """A compact, escaped overview of every comparison and the first row issues."""
     multiple_databases = len(run.databases) > 1
-    files, issues, skipped = [], [], {}
+    files, issues = [], []
     for index, result in enumerate(run.results, 1):
         database = result.database_source or run.database
         file_name = escape(result.source.path.name)
@@ -117,20 +137,17 @@ def result_overview_html(run, issue_limit=12):
         files.append(f'<tr><td class="result-number">{index}</td><td class="result-file">{file_name}</td>'
                      f'<td class="result-number">{matched}</td><td class="result-number">{review}</td>'
                      f'<td><span class="result-status {state}">{label}</span></td></tr>')
-        if result.skipped_database_rows:
-            skipped[(database.path.name, database.sheet, result.database_match_column,
-                     tuple(result.skipped_database_rows))] = len(result.skipped_database_rows)
         if result.error:
             issues.append((index, "—", "—", "ERROR", result.error))
             continue
         differences = {}
-        for number, _, field, actual, expected in result.differences:
-            differences.setdefault(number, []).append(f"{field}: {text(actual)} → {text(expected)}")
+        for number, _, _field, actual, expected in result.differences:
+            differences.setdefault(number, []).append((actual, expected))
         key_position = result.headers.index(result.source.column)
         for number, status, _, values in result.records:
             if status != "MATCHED":
                 issues.append((index, str(number), text(values[key_position]), status,
-                               "; ".join(differences.get(number, []))))
+                               differences.get(number, [])))
         database_key = result.database_match_column or database.column
         key_position = result.database_headers.index(database_key) if result.missing_rows else None
         for number, values in result.missing_rows:
@@ -142,27 +159,30 @@ def result_overview_html(run, issue_limit=12):
     show_details = any(row[4] for row in visible)
     issue_rows = []
     for index, number, key, status, detail in visible:
-        issue_rows.append(f'<tr><td class="result-number">{index}</td><td class="result-number">{number}</td>'
-                          f'<td class="result-key">{escape(key) or "—"}</td><td>{escape(status)}</td>'
-                          + (f'<td>{escape(detail)}</td>' if show_details else "") + "</tr>")
+        if isinstance(detail, list):
+            detail_html = "".join(
+                '<div class="result-difference">'
+                '<div class="result-value"><span class="result-value-label">Your file</span>'
+                f'<span class="result-value-text">{escape(comparison_text(actual))}</span></div>'
+                '<div class="result-value"><span class="result-value-label">Database</span>'
+                f'<span class="result-value-text">{escape(comparison_text(expected))}</span></div></div>'
+                for actual, expected in detail)
+        else:
+            detail_html = escape(detail)
+        issue_rows.append(f'<tr><td class="result-number" data-label="File #">{index}</td>'
+                          f'<td class="result-number" data-label="Row">{number}</td>'
+                          f'<td class="result-key" data-label="Lookup value">{escape(key) or "—"}</td>'
+                          f'<td class="result-issue" data-label="Issue">{escape(status)}</td>'
+                          + (f'<td class="result-detail" data-label="Details">{detail_html}</td>' if show_details else "") + "</tr>")
     issue_header = '<th>File #</th><th>Row</th><th>Lookup value</th><th>Issue</th>' + ('<th>Details</th>' if show_details else '')
-    issue_body = (f'<table class="result-table"><thead><tr>{issue_header}</tr></thead><tbody>{"".join(issue_rows)}</tbody></table>'
+    issue_body = (f'<table class="result-table result-issues"><thead><tr>{issue_header}</tr></thead><tbody>{"".join(issue_rows)}</tbody></table>'
                   if issues else '<p class="result-note">No issues in the compared fields.</p>')
-    if issues:
-        note = (f"Showing {len(visible):,} of {len(issues):,} issue entries. Full details are in the Excel report."
-                if len(visible) < len(issues) else f"{len(issues):,} issue entries. File # refers to the overview; row numbers are from the source file.")
-        issue_body += f'<p class="result-note">{note}</p>'
-    contexts = []
-    if not multiple_databases:
-        contexts.append(f"Database: {escape(run.database.path.name)}")
-    for (name, sheet, column, _), count in skipped.items():
-        prefix = f"{escape(name)} · " if multiple_databases else ""
-        contexts.append(f"{prefix}Skipped {count:,} database rows with blank {escape(column)} values")
-    contexts.append("Results cover the mapped fields. Unmapped fields remain unchecked.")
+    if len(visible) < len(issues):
+        issue_body += (f'<p class="result-note">Showing {len(visible):,} of {len(issues):,} issue entries. '
+                       'Full details are in the Excel report.</p>')
     return ('<div class="result-overview"><section class="result-panel"><h4>File overview</h4>'
             '<table class="result-table"><thead><tr><th>#</th><th>File</th><th>Matched</th><th>Review</th><th>Result</th></tr></thead>'
-            f'<tbody>{"".join(files)}</tbody></table></section><section class="result-panel"><h4>Issues across files</h4>{issue_body}</section></div>'
-            f'<p class="result-context">{" · ".join(contexts)}</p>')
+            f'<tbody>{"".join(files)}</tbody></table></section><section class="result-panel"><h4>Issues across files</h4>{issue_body}</section></div>')
 
 
 def render_file_details(result, run, index):
@@ -182,7 +202,7 @@ def render_file_details(result, run, index):
             st.warning(f"Missing columns: {', '.join(result.missing_columns) or 'None'}. Extra columns: {', '.join(result.extra_columns) or 'None'}.")
         if result.differences:
             has_issues = True
-            st.dataframe([{"Row": number, "Field": name, "Your file": text(actual), "Database": text(expected)}
+            st.dataframe([{"Row": number, "Field": name, "Your file": comparison_text(actual), "Database": comparison_text(expected)}
                           for number, database_row, name, actual, expected in result.differences[:PREVIEW_LIMIT]],
                          hide_index=True, width="stretch")
             if len(result.differences) > PREVIEW_LIMIT:
@@ -272,6 +292,7 @@ def render_results(run):
     review_count = sum(result.verdict not in PASSED for result in results)
     matched = sum(result.count("MATCHED") for result in results)
     multiple_databases = len(run.databases) > 1
+    st.markdown('<style>.st-key-check_preparation {display: none;}</style>', unsafe_allow_html=True)
     heading, screenshot, download = st.columns([2, 1, 1], vertical_alignment="center")
     with heading:
         st.subheader("Check results")
@@ -282,26 +303,19 @@ def render_results(run):
         st.markdown("""<style>
         .st-key-check_setup, .st-key-result_details, .st-key-result_divider {display: none !important;}
         [data-testid="stHeader"] {display: none !important;}
-        .stMainBlockContainer {max-width: 1600px !important; padding: .5rem 2rem 1rem !important;}
+        .stMainBlockContainer {max-width: none !important; padding: .5rem 1rem 1rem !important;}
         .stMainBlockContainer > [data-testid="stVerticalBlock"] {gap: .6rem !important;}
         </style>""", unsafe_allow_html=True)
     with download:
         st.download_button("Download Excel report", data=run.report, file_name="CHCODE_check_report.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            key="download_report", type="secondary", on_click="ignore", width="stretch")
-    if review_count and not screenshot_view:
-        noun = "database comparisons" if multiple_databases else "file(s)"
-        st.warning(f"{review_count} of {len(results)} {noun} need review. See the overview and issues below.")
-    elif not review_count and not screenshot_view:
-        st.success("All files match the database across the compared fields.")
     columns = st.columns(3)
     labels = (["Database comparisons", "Rows matching all", "Comparisons to review"] if multiple_databases
               else ["Files checked", "Rows matched", "Files to review"])
     for column, label, value in zip(columns, labels,
                                     [len(results), run.matched_in_all if multiple_databases else matched, review_count]):
         column.metric(label, f"{value:,}")
-    if multiple_databases:
-        st.caption("Each file is checked against every database. A row passes overall only when it matches all databases. The Excel report includes combined row results and separate differences for each database.")
     st.markdown(result_overview_html(run), unsafe_allow_html=True)
     with st.container(key="result_details"):
         render_result_details(run)
@@ -425,15 +439,15 @@ def main():
                                                     for database in database_uploads]
             preparations = st.session_state.preparation
 
-        for database_upload, prepared in zip(database_uploads, preparations):
-            render_preparation(prepared, database_upload)
-
         ready = bool(preparations and file_uploads and all(
             item.database and not item.database_error for item in preparations))
-        if not database_uploads:
-            st.caption("Add a database and your files to get started. Excel and CSV are supported.")
-        elif preparations and not file_uploads:
-            st.caption("Add at least one file to check.")
+        with st.container(key="check_preparation"):
+            for database_upload, prepared in zip(database_uploads, preparations):
+                render_preparation(prepared, database_upload)
+            if not database_uploads:
+                st.caption("Add a database and your files to get started. Excel and CSV are supported.")
+            elif preparations and not file_uploads:
+                st.caption("Add at least one file to check.")
 
         options = Options(ignore_case=True, trim_spaces=True, mapped_fields=True,
                           require_flow_stage=True, allow_missing_flow_stage=True)

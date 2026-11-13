@@ -4,6 +4,16 @@ A Streamlit app for validating rows in Excel or CSV files against one or more da
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
+## Database rows with blank lookup values
+
+Database rows with a blank lookup identifier are automatically excluded from comparison. `None`, empty strings and whitespace-only IDs do not block a mixed database containing valid records. Entirely empty rows are already ignored. Other blank fields do not remove a customer record: a valid account with a blank email is still checked. The source workbook is read without modification.
+
+Exclusions use each file's actual database lookup column, such as `Old I.C.`, `CHCODE`, account number, `Debtor ID` or phone. A blank `Old I.C.` does not discard a record used by a valid phone or debtor-ID lookup. The interface shows the skipped count, the Excel Summary records it, and a `Skipped DB` worksheet lists the original source row numbers and lookup column for every exclusion. Full-copy checks exclude those rows from missing-record counts too.
+
+Campaign rows with blank or unknown lookup values remain **BLANK KEY** or **NOT FOUND**. A database without usable lookup values still receives an error. For unfamiliar layouts, populated database IDs must remain unique; blank IDs never establish customer identity or field-mapping evidence.
+
+The November 13, 2026 `DataGrid.xlsx` contains one excluded row with a blank `Old I.C.` at source row 474. All **472 campaign rows** in the three supplied CBS APD files match across the six mapped fields: **25** in Bucket 4, **48** in Bucket 7 and **399** in Bucket 8. The report is `reports/CBS_APD_blank_key_check_2026-11-13.xlsx`. SHA-256 checksums confirmed the workbook and all three CSV inputs were unchanged.
+
 ## HSBC SMS Credit Seeker and OffUs Payer discount blasts
 
 Upload `HSBC DB as of Nov 12, 2026.xlsx` under **Add your databases**, add both SMS blast workbooks under **Add files to check**, then click **Check files**. The checker detects this layout by headers, so future dates, renamed files, reordered columns and equivalent CSV exports work automatically. Each file is checked independently against the uploaded DB. No manual field mapping is needed.
@@ -82,7 +92,7 @@ Identifiers and account numbers preserve leading zeros. Existing customer-name c
 
 The app labels each comparison with its database. The report contains a **Summary** with database names and lookup columns, separate row results, differences and field mappings for every database/file pair, and a **Combined** worksheet for each campaign. A combined row is **MATCHED** only if it passes every database; a missing identifier, differing field or failed comparison keeps it in review. A match in one database cannot override an issue in another. Invalid databases block the run until corrected.
 
-SALAD ML's unnamed export column is retained without shifting the named columns. DataGrid's final count-and-sums footer is excluded only when its count and all populated totals reconcile; the footer may contain `#N/A` in a contact cell. Customer rows with blank identifiers still cause an error.
+SALAD ML's unnamed export column is retained without shifting the named columns. DataGrid's final count-and-sums footer is recognized when its count and all populated totals reconcile; the footer may contain `#N/A` in a contact cell. Other rows with blank lookup identifiers are automatically excluded and listed in the report.
 
 The November 9, 2026 input has **16,056 campaign rows**. All 16,056 match DataGrid; **15,920 match SALAD ML and 136 have customer-name differences**. There are no missing or blank campaign identifiers. The combined result is 15,920 passing rows and 136 needing review. The report is `reports/SBF_SALAD_NEGRES_both_databases_2026-11-09.xlsx`. Source files are read without modification.
 
@@ -188,7 +198,7 @@ Run the same automatic checks from this folder:
 
 ## New file and database layouts
 
-The browser app and command-line `--auto` mode can inspect unfamiliar Excel and CSV layouts. The database needs a complete, unique debtor, customer, or account identifier. The checker considers compatible identifier headers and matching values, then checks candidate fields against those same identified database records. Names alone, staff assignments, repeated campaign values, and blank/blank pairs cannot establish customer identity.
+The browser app and command-line `--auto` mode can inspect unfamiliar Excel and CSV layouts. The database needs a debtor, customer, or account identifier with unique populated values. The checker considers compatible identifier headers and matching values, then checks candidate fields against those same identified database records. Names alone, staff assignments, repeated campaign values, and blank/blank pairs cannot establish customer identity.
 
 Review the detected lookup, proposed fields, and evidence before selecting **Check files**. Known profile mappings remain fixed so changed values still produce differences. For unfamiliar layouts, fields without enough header or same-record evidence stay **NOT CHECKED**. Unknown or ambiguous layouts receive an error requiring attention; they are not reported as passing. The selected lookup applies to the whole file, including unknown and blank identifiers. Future exports with the established PARKED/LEGACY layout are recognized from their columns rather than their filenames.
 
@@ -204,7 +214,7 @@ Uploaded data is processed on the app server. Each browser session keeps its own
 
 1. Add one or more database `.xlsx`, `.xlsm`, or `.csv` files in **Add your databases**.
 2. Add multiple files in **Add files to check**. Excel and CSV files can be mixed, including files with and without headers.
-3. Review the detection summary for each file's worksheet, header row, lookup column, and status. The database needs a `CHCODE`, `primary_key`, or `indexone_uid` header, supported DataGrid or endorsement headers, or a complete, unique account identifier for automatic inference. If a workbook has multiple supported worksheets, save the intended worksheet as a separate file and upload it.
+3. Review the detection summary for each file's worksheet, header row, lookup column, and status. The database needs a `CHCODE`, `primary_key`, or `indexone_uid` header, supported DataGrid or endorsement headers, or a account identifier with unique populated values for automatic inference. If a workbook has multiple supported worksheets, save the intended worksheet as a separate file and upload it.
 4. Click **Check files** to compare your uploaded rows against every database; smaller campaign subsets are supported.
 5. Read the compact results, then expand a file to see its **Issues**, **Rows**, or **Fields checked**. Row previews default to entries needing review when issues exist.
 6. Click **Download Excel report** for every original row, changed value, and field mapping.

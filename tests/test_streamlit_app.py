@@ -11,6 +11,7 @@ from test_sbf_salad_email import salad_email_pair
 from test_sbf_balance_viber import BLAST_HEADERS as BALANCE_HEADERS, balance_database, balance_row
 from test_sbf_discount_viber import discount_database
 from test_hsbc_sms_discount import ALICE as SMS_ALICE, sms_blast, sms_database
+from test_blank_database_keys import blank_key_pair
 from test_multi_database import dual_database_uploads
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
@@ -50,6 +51,19 @@ class StreamlitAppTests(unittest.TestCase):
 
     def detection_rows(self):
         return next(item.value for item in self.app.dataframe if "Lookup column" in item.value.columns)
+
+    def test_database_blank_lookup_ids_are_skipped_without_blocking_the_browser(self):
+        database, blast = blank_key_pair()
+        self.database = BrowserFile(database)
+        self.files = [BrowserFile(blast)]
+        self.run_check()
+        self.assertFalse(self.app.error)
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual(result.skipped_database_rows, [3, 5, 6])
+        self.assertEqual(result.count("MATCHED"), 2)
+        self.assertEqual(result.count("BLANK KEY"), 1)
+        self.assertTrue(any("Skipped 3 database row(s) with blank Old I.C." in caption.value
+                            for caption in self.app.caption))
 
     def test_uploads_detect_layouts_without_manual_options(self):
         self.app.run()

@@ -13,14 +13,16 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 12)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 13)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
+    import auto_match as _auto_match
+    importlib.reload(_auto_match)
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 20:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 21:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
@@ -80,6 +82,8 @@ def apply_style():
 
 
 def render_file_details(result, run, index):
+    if result.skipped_database_rows:
+        st.caption(f"Skipped {len(result.skipped_database_rows):,} database row(s) with blank {result.database_match_column} values. Source row numbers are listed in the Excel report.")
     st.caption(result.source.path.name)
     if result.database_source:
         st.caption(f"Database: {result.database_source.path.name} - {result.database_source.sheet}")

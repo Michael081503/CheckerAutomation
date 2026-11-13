@@ -81,7 +81,8 @@ def main():
                           "matched": result.count("MATCHED"), "changed": result.count("DIFFERENT"),
                           "not_found": result.count("NOT FOUND"), "blank_key": result.count("BLANK KEY"),
                           "verdict": result.verdict, "checked_fields": len(result.mappings),
-                          "unchecked_fields": result.ignored_columns, "error": result.error}))
+                          "unchecked_fields": result.ignored_columns,
+                          "skipped_database_rows": len(result.skipped_database_rows), "error": result.error}))
     print(f"Report: {arguments.output.resolve()}")
     return 1 if any(result.error for result in results) else 0
 

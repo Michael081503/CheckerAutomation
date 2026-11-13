@@ -47,7 +47,7 @@ These templates check four fields on one debtor record. PARKED's unnamed column 
 
 The database's `Email` field contains phone numbers in these supplied layouts, and the template's `LastName` contains account numbers. Keep these established mappings even when all uploaded values differ; the checker reports those differences on the debtor's own record. `FirstName`, `CHCode`, `OB`, `Monthly`, `Terms`, `Promo`, and `Level` remain **NOT CHECKED**, including staff assignments and blank campaign fields. Original values and column positions are preserved, and missing `FLOW_STAGE` uses the filename.
 
-For unfamiliar uploads, automatic inference requires a complete, unique database identifier and compatible identifier/value evidence. Additional field proposals use headers and evidence from the same identified records. Names alone and blank or repeated campaign values are insufficient. Unknown or ambiguous layouts need attention, and unsupported fields remain **NOT CHECKED**. Recognized profiles retain their mappings when values are wrong; the selected lookup stays fixed for the whole file.
+For unfamiliar uploads, automatic inference requires a database identifier with unique populated values and compatible identifier/value evidence; rows with blank lookup values are excluded. Additional field proposals use headers and evidence from the same identified records. Names alone and blank or repeated campaign values are insufficient. Unknown or ambiguous layouts need attention, and unsupported fields remain **NOT CHECKED**. Recognized profiles retain their mappings when values are wrong; the selected lookup stays fixed for the whole file.
 
 For local command-line checks with the same browser behavior, run:
 
@@ -71,7 +71,9 @@ These repository, entrypoint, and Python-version settings follow Streamlit's [of
 
 ## Recover after a source update
 
-For SALAD email, PARKED/LEGACY or unfamiliar-layout support, update all four Python modules together: `streamlit_app.py`, `web_checker.py`, `checker.py`, and `auto_match.py`. A missing `auto_match.py` causes an import error before the upload screen opens. This release uses comparison version 8 and automatic-detection version 16. Re-upload the file pair after the update so old session results are cleared.
+Rows with blank database lookup values are automatically excluded. This includes DataGrid `Old I.C.` rows, without dropping accounts just because email or another non-key field is blank. The results show the skipped count, and the Excel report lists each excluded database source row. Campaign rows with blank or unknown keys remain row issues. Update `checker.py`, `auto_match.py`, `web_checker.py` and `streamlit_app.py` together; cached modules and upload detection are refreshed for this behavior.
+
+For SALAD email, PARKED/LEGACY or unfamiliar-layout support, update all four Python modules together: `streamlit_app.py`, `web_checker.py`, `checker.py`, and `auto_match.py`. A missing `auto_match.py` causes an import error before the upload screen opens. This release uses comparison version 13 and automatic-detection version 21. Re-upload the file pair after the update so old session results are cleared.
 
 If `DataGrid.xlsx` from the 29 October CBS APD batch produces the database-header error, confirm the deployed branch includes the Excel dimension fix in `checker.py` and the updated `streamlit_app.py` and `web_checker.py`. That workbook reports a saved range of `A1:C1` even though it contains 37 columns. The fix reads the actual cells and excludes its verified totals footer, detecting 1,453 account records with `Old I.C.` as the key. Upload all four CBS APD CSVs again after updating the deployment. All 1,060 keys are found; email differences remain because the corresponding database Email cells are blank.
 
@@ -85,7 +87,7 @@ If Cloud still reports `cannot import name 'is_datagrid_pl_viber_blast'`, verify
 
 1. Upload the database under **Add your database**.
 2. Upload multiple CSV or Excel files under **Add files to check**. Files with and without headers can be mixed. For the MSB or CBS PL email blast, upload the corresponding `DataGrid.xlsx` snapshot as the database; for the CBS APD email blast, upload `DataGrid (1).xlsx`.
-3. Review the automatic detection summary: it shows each file's worksheet, header row, lookup column, and status. Expand detected field evidence for inferred layouts. The database must contain `CHCODE`, `primary_key`, or `indexone_uid`, the recognized DataGrid or SBF endorsement headers described below, or a complete, unique account identifier for automatic inference. A workbook with multiple supported worksheets must be split into separate files before upload.
+3. Review the automatic detection summary: it shows each file's worksheet, header row, lookup column, and status. Expand detected field evidence for inferred layouts. The database must contain `CHCODE`, `primary_key`, or `indexone_uid`, the recognized DataGrid or SBF endorsement headers described below, or a account identifier with unique populated values for automatic inference. A workbook with multiple supported worksheets must be split into separate files before upload.
 4. Select **Check files**. The app compares uploaded rows against the database and automatically maps the supported HSBC or DataGrid fields. Campaign subsets are supported.
 5. Read the compact pass/review results. Expand an individual file for its issues, row preview, or field coverage, then download the Excel report.
 

@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 12
+COMPARISON_VERSION = 13
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -83,6 +83,7 @@ class FileResult:
     flow_stage: str = ""
     database_match_column: str = ""
     database_source: Source | None = None
+    skipped_database_rows: list[int] = field(default_factory=list)
 
     @property
     def file_identifier(self) -> str:
@@ -893,7 +894,6 @@ def check_files(database: Source, files: list[Source], options: Options,
     lookup: dict[str, list[int]] = {}
     database_rows = dict(table.rows)
     signatures = {}
-    blank_rows = []
     for row_number, values in table.rows:
         if cancelled():
             raise Cancelled()
@@ -904,13 +904,8 @@ def check_files(database: Source, files: list[Source], options: Options,
                 signatures[row_number] = tuple(compare_value(values[index], "Text", options,
                                                               customer_name=table.headers[index] in customer_name_columns)
                                                for index in comparison_positions)
-        else:
-            blank_rows.append(row_number)
     if not lookup:
         raise ValueError("The database match column has no nonblank values.")
-    if blank_rows:
-        key_name = "CHCODEs" if database.column.casefold() == "chcode" else f"values in '{database.column}'"
-        raise ValueError(f"The database has blank {key_name} at row(s) {', '.join(map(str, blank_rows[:20]))}. Fill these before comparing rows.")
     results = []
     viber_lookups = {}
     pl_viber_lookup = None
@@ -961,9 +956,8 @@ def check_files(database: Source, files: list[Source], options: Options,
                             raise Cancelled()
                         key = compare_value(values[key_position], key_mapping.comparison, options,
                                             customer_name=is_customer_name_column(source.database_column))
-                        if not key:
-                            raise ValueError(f"The database {source.database_column} column has a blank value at row {number}.")
-                        candidate_lookup.setdefault(key, []).append(number)
+                        if key:
+                            candidate_lookup.setdefault(key, []).append(number)
                     if not candidate_lookup:
                         raise ValueError(f"The database {source.database_column} column has no nonblank values.")
                     inferred_lookups[cache_key] = candidate_lookup
@@ -986,9 +980,10 @@ def check_files(database: Source, files: list[Source], options: Options,
                         if cancelled():
                             raise Cancelled()
                         debtor = normalize(values[debtor_position], options)
-                        if not debtor:
-                            raise ValueError(f"The database Debtor ID column has a blank value at row {number}.")
-                        candidate_lookup.setdefault(debtor, []).append(number)
+                        if debtor:
+                            candidate_lookup.setdefault(debtor, []).append(number)
+                    if not candidate_lookup:
+                        raise ValueError("The database Debtor ID column has no nonblank values.")
                     pl_viber_lookup = candidate_lookup
                 comparison_lookup = pl_viber_lookup
             if (options.mapped_fields and not source.database_column
@@ -1016,6 +1011,10 @@ def check_files(database: Source, files: list[Source], options: Options,
                 if not viber_lookups[database_phone]:
                     raise ValueError(f"The database {database_phone} column has no nonblank phone numbers.")
                 comparison_lookup = viber_lookups[database_phone]
+            # Exclusions follow the actual lookup for this file. A row with a
+            # blank Old I.C. may still be valid for a phone or Debtor ID lookup.
+            included_rows = {number for numbers in comparison_lookup.values() for number in numbers}
+            result.skipped_database_rows = [number for number, _ in table.rows if number not in included_rows]
             if (options.mapped_fields and options.allow_missing_flow_stage and source.has_headers
                     and not find_header(target.headers, "FLOW_STAGE") and phone_column(target.headers)
                     and not phone_column(table.headers)
@@ -1120,7 +1119,8 @@ def check_files(database: Source, files: list[Source], options: Options,
                 else:
                     status = "EXTRA ROW"
                 result.records.append((row_number, status, str(matched) if matched is not None else "", values))
-            result.missing_rows = [(number, values) for number, values in table.rows if number not in consumed]
+            result.missing_rows = [(number, values) for number, values in table.rows
+                                   if number in included_rows and number not in consumed]
         except Cancelled:
             raise
         except Exception as error:
@@ -1157,7 +1157,8 @@ def export_report(path: Path, database: Source, options: Options, results: list[
     append(summary, ["File", "Full path", "Sheet", "Match column", "Rows", "Matched rows", "Not found", "Blank key", "Error", "Report sheet",
                      "Comparison", "Different rows", "Extra rows", "Missing database rows", "Missing columns", "Extra columns", "Differences sheet", "Missing rows sheet",
                      "Scope", "Fields checked", "Unchecked file columns", "Mappings sheet",
-                     "FLOW_STAGE", "File identifier column", "Database match column", "Database", "Database sheet"])
+                     "FLOW_STAGE", "File identifier column", "Database match column", "Database", "Database sheet",
+                     "Skipped database rows", "Skipped database rows sheet"])
     for index, result in enumerate(results, 1):
         row_database = result.database_source or database
         name = f"File {index:03d}"
@@ -1171,7 +1172,13 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                          "; ".join(f"{item.file_column} → {item.database_column} ({item.comparison})" for item in result.mappings),
                          ", ".join(result.ignored_columns), f"Mappings {index:03d}" if result.comparison_mode == "Uploaded rows" else "",
                          result.flow_stage, result.flow_stage_column, result.database_match_column or row_database.column,
-                         str(row_database.path), row_database.sheet])
+                         str(row_database.path), row_database.sheet,
+                         len(result.skipped_database_rows), f"Skipped DB {index:03d}" if result.skipped_database_rows else ""])
+        if result.skipped_database_rows:
+            skipped = book.create_sheet(f"Skipped DB {index:03d}")
+            append(skipped, ["Database source row", "Lookup column", "Reason"])
+            for number in result.skipped_database_rows:
+                append(skipped, [number, result.database_match_column or row_database.column, "Blank lookup value; excluded from comparison"])
         detail = book.create_sheet(name)
         detail.freeze_panes = "D2"
         append(detail, ["Source row", "Result", "Database row(s)", *result.headers])

@@ -19,7 +19,7 @@ from checker import (
 )
 from auto_match import database_key_candidates, has_identifier_header, infer_layout, is_assignment_template
 
-AUTO_DETECTION_VERSION = 20
+AUTO_DETECTION_VERSION = 21
 
 
 @dataclass(frozen=True)
@@ -243,10 +243,9 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
             table, database_column, inferred_database = candidates[0]
             key_position = table.headers.index(database_column)
             database_keys = {normalize(values[key_position], Options()) for _, values in table.rows}
-            if not database_keys or database_keys == {""}:
+            database_keys.discard("")
+            if not database_keys:
                 raise ValueError("The database match column has no nonblank values.")
-            if "" in database_keys:
-                raise ValueError(f"The database has blank values in '{database_column}'. Fill these before comparing rows.")
             database_info = Inspection(database_sheets, table.sheet, tuple(table.headers),
                                        database_column, table.header_row)
             database_source = UploadedSource(database, table.sheet, database_column)

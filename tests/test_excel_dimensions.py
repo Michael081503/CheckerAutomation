@@ -116,7 +116,7 @@ class ExcelDimensionTests(unittest.TestCase):
             book.close()
         self.assertEqual(path.read_bytes(), database.data)
 
-    def test_blank_key_accounts_and_unverified_totals_still_fail(self):
+    def test_blank_key_accounts_and_unverified_totals_are_excluded_by_key(self):
         invalid = [
             ["3", None, None, None, None, None, None, "1,200.30", "1,050.00"],
             ["2", None, None, None, None, None, None, "1,200.31", "1,050.00"],
@@ -130,10 +130,9 @@ class ExcelDimensionTests(unittest.TestCase):
             with self.subTest(footer=footer):
                 path = self.database([HEADERS, *ACCOUNTS, footer])
                 self.assertEqual(len(read_table(path).rows), 3)
-                with self.assertRaisesRegex(ValueError, "blank values"):
-                    check_files(Source(path, "Sheet", "Old I.C."), [], Options(mapped_fields=True))
+                self.assertEqual(check_files(Source(path, "Sheet", "Old I.C."), [], Options(mapped_fields=True)), [])
                 prepared = prepare_uploaded_check(Upload(path.name, path.read_bytes()), [])
-                self.assertIn("blank values", prepared.database_error)
+                self.assertEqual(prepared.database_error, "")
 
     def test_missing_database_email_is_a_difference_even_when_the_key_matches(self):
         account = list(ACCOUNTS[0])

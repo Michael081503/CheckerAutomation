@@ -92,6 +92,9 @@ class CloudStartupTests(unittest.TestCase):
             if sys.argv[1] == "previous-hsbc-sms-discount":
                 checker.COMPARISON_VERSION = 11
                 web_checker.AUTO_DETECTION_VERSION = 19
+            if sys.argv[1] == "previous-blank-database-keys":
+                checker.COMPARISON_VERSION = 12
+                web_checker.AUTO_DETECTION_VERSION = 20
             web_checker._key_column = outdated_detector
 
             with patch("streamlit.file_uploader", side_effect=uploader):
@@ -103,8 +106,8 @@ class CloudStartupTests(unittest.TestCase):
                 run = app.session_state["check_run"]
                 assert run.results[0].database_match_column == "Debtor ID"
                 assert run.results[0].count("MATCHED") == 1
-                assert web_checker.AUTO_DETECTION_VERSION == 20
-                assert checker.COMPARISON_VERSION == 12
+                assert web_checker.AUTO_DETECTION_VERSION == 21
+                assert checker.COMPARISON_VERSION == 13
                 assert callable(checker.is_salad_endo_pair)
 
                 # Healthy modules and the completed result survive normal reruns.
@@ -116,7 +119,7 @@ class CloudStartupTests(unittest.TestCase):
                 assert web_checker.prepare_uploaded_check is detect
                 assert app.session_state["check_run"] is run
         """)
-        for cached in ("engine-and-adapter", "adapter-only", "previous-comparison", "previous-endorsement", "previous-regular", "previous-hsbc-titles", "previous-excel-dimensions", "previous-optional-identifiers", "previous-generic-matching", "previous-salad-email", "previous-balance-viber", "previous-discount-export", "previous-hsbc-sms-discount"):
+        for cached in ("engine-and-adapter", "adapter-only", "previous-comparison", "previous-endorsement", "previous-regular", "previous-hsbc-titles", "previous-excel-dimensions", "previous-optional-identifiers", "previous-generic-matching", "previous-salad-email", "previous-balance-viber", "previous-discount-export", "previous-hsbc-sms-discount", "previous-blank-database-keys"):
             with self.subTest(cached=cached):
                 result = subprocess.run(
                     [sys.executable, "-c", script, cached], cwd=root,

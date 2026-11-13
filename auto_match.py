@@ -63,13 +63,14 @@ def has_identifier_header(headers) -> bool:
 
 
 def database_key_candidates(table: Table) -> list[str]:
-    """Only complete, unique identifier columns are automatic lookup choices."""
+    """Lookup choices need unique populated identifiers; blank IDs are excluded."""
     result = []
     for index, header in enumerate(table.headers):
         if not _identifier(header):
             continue
         values = [normalize(row[index], Options()) for _, row in table.rows]
-        if values and all(values) and len(set(values)) == len(values):
+        populated = [value for value in values if value]
+        if populated and len(set(populated)) == len(populated):
             result.append(header)
     return sorted(result, key=lambda header: (
         {"debtor": 0, "customer": 1, "account": 2, "chcode": 3}.get(key_group(header), 4),
@@ -134,7 +135,8 @@ def infer_layout(target: Table, database: Table) -> InferredLayout:
     unnamed = [header for header in target.headers if token(header).startswith("unnamedcolumn")]
     for database_column in db_keys:
         db_pos = database.headers.index(database_column)
-        lookup = {normalize(values[db_pos], options): (number, values) for number, values in database.rows}
+        lookup = {key: (number, values) for number, values in database.rows
+                  if (key := normalize(values[db_pos], options))}
         for file_pos, file_column in enumerate(target.headers):
             if not _source_key(file_column):
                 continue
@@ -170,7 +172,7 @@ def infer_layout(target: Table, database: Table) -> InferredLayout:
             raise ValueError(f"Ambiguous identifier matches: {selected.file_column} / {selected.database_column} and {other.file_column} / {other.database_column} point to different records. Supply a file with one consistent account identifier.")
     mappings = [ColumnMapping(selected.file_column, selected.database_column)]
     evidence = [{"File column": selected.file_column, "Database column": selected.database_column,
-                 "Comparison": "Text", "Evidence": f"Lookup: {selected.hits:,} of {len(target.rows):,} rows found; database IDs are complete and unique"}]
+                 "Comparison": "Text", "Evidence": f"Lookup: {selected.hits:,} of {len(target.rows):,} rows found; populated database IDs are unique; blank IDs are excluded"}]
     warnings = []
     for file_pos, file_column in enumerate(target.headers):
         if file_column == selected.file_column or token(file_column) == "flowstage":

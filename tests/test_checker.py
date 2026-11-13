@@ -297,10 +297,13 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(result.verdict, "DIFFERENT ROWS")
         self.assertEqual(result.count("MISSING FROM FILE"), 1)
 
-    def test_database_blank_key_rejected_to_avoid_ignoring_rows(self):
+    def test_database_blank_keys_are_excluded_from_full_copy_comparison(self):
         db = self.csv("db.csv", [["CHCODE", "Name"], ["A", "Alice"], ["", "Bob"]])
-        with self.assertRaisesRegex(ValueError, "blank CHCODEs"):
-            check_files(self.source(db), [], Options())
+        target = self.csv("target.csv", [["CHCODE", "Name"], ["A", "Alice"]])
+        result = check_files(self.source(db), [self.source(target)], Options())[0]
+        self.assertEqual(result.verdict, "SAME ROWS")
+        self.assertEqual(result.skipped_database_rows, [3])
+        self.assertEqual(result.missing_rows, [])
 
     def test_report_contains_cell_differences_missing_rows_and_verdict(self):
         db = self.csv("db.csv", [["CHCODE", "Name"], ["A", "Alice"], ["B", "Bob"]])

@@ -4,6 +4,8 @@ A Streamlit app for validating rows in Excel or CSV files against one or more da
 
 The interface uses a dark theme with compact upload panels, a teal check button, and results that expand when you need details. File setup is automatic; no advanced settings or column selections are needed.
 
+Results include a compact **File overview** beside **Issues across files**, with source row numbers and lookup values. Turn on **Screenshot view** next to the report download to hide uploads and detailed file cards and use more screen width at normal zoom. Turn it off to return to the full view; uploads, results, filters and the Excel report are preserved. The overview shows every file/database comparison and up to 12 issue entries, with an explicit count when more issues are available in the report.
+
 ## Database rows with blank lookup values
 
 Database rows with a blank lookup identifier are automatically excluded from comparison. `None`, empty strings and whitespace-only IDs do not block a mixed database containing valid records. Entirely empty rows are already ignored. Other blank fields do not remove a customer record: a valid account with a blank email is still checked. The source workbook is read without modification.

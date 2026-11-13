@@ -183,6 +183,51 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertFalse(self.app.exception)
         self.assertIn("check_run", self.app.session_state)
 
+    def test_screenshot_view_preserves_uploads_results_and_download_when_toggled(self):
+        self.run_check()
+        run = self.app.session_state["check_run"]
+        preparation = self.app.session_state["preparation"]
+        self.app.toggle(key="screenshot_view").set_value(True).run()
+        self.assertFalse(self.app.exception)
+        self.assertIs(self.app.session_state["check_run"], run)
+        self.assertIs(self.app.session_state["preparation"], preparation)
+        self.assertTrue(any(".st-key-check_setup, .st-key-result_details" in item.value
+                            and "display: none" in item.value for item in self.app.markdown))
+        self.assertEqual(len(self.app.get("download_button")), 1)
+        self.app.toggle(key="screenshot_view").set_value(False).run()
+        self.assertFalse(self.app.exception)
+        self.assertIs(self.app.session_state["check_run"], run)
+        self.assertEqual(self.app.session_state["check_run"].report, run.report)
+        self.assertFalse(any("display: none !important" in item.value for item in self.app.markdown))
+
+    def test_compact_overview_combines_files_and_keeps_source_rows_and_lookup_values(self):
+        self.database = BrowserFile(discount_database())
+        self.files = [BrowserFile(csv_upload(f"LEVEL 5 BATCH {number:02}.csv", [
+            BALANCE_HEADERS, balance_row(), balance_row(phone="09199999999"),
+        ])) for number in range(1, 7)]
+        self.run_check()
+        overview = next(item.value for item in self.app.markdown if 'class="result-overview"' in item.value)
+        for number in range(1, 7):
+            self.assertIn(f"LEVEL 5 BATCH {number:02}.csv", overview)
+        self.assertEqual(overview.count("NOT FOUND"), 6)
+        self.assertEqual(overview.count("09199999999"), 6)
+        self.assertEqual(overview.count('<td class="result-number">3</td>'), 8)
+        self.assertIn("6 issue entries", overview)
+
+    def test_compact_overview_escapes_uploaded_values_and_discloses_issue_limit(self):
+        from streamlit_app import result_overview_html
+        self.run_check()
+        run = self.app.session_state["check_run"]
+        result = run.results[0]
+        row, db_row, field, _, expected = result.differences[0]
+        result.differences[0] = (row, db_row, field, '<img src=x onerror="alert(1)">', expected)
+        overview = result_overview_html(run)
+        self.assertIn("&lt;img", overview)
+        self.assertNotIn("<img", overview)
+        limited = result_overview_html(run, issue_limit=0)
+        self.assertIn("Showing 0 of 1 issue entries", limited)
+        self.assertIn("Full details are in the Excel report", limited)
+
     def test_replacing_file_with_same_name_clears_results_and_redetects(self):
         self.run_check()
         self.files = [BrowserFile(csv_upload("campaign.csv", [["First row", "00123"]]))]

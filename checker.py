@@ -15,7 +15,7 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 14
+COMPARISON_VERSION = 15
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
@@ -806,17 +806,35 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
                               and name != result.flow_stage_column]
     cimb = is_cimb_database(table.headers) and is_cimb_email_blast(target.headers)
     cimb_key_position = target.headers.index(find_header(target.headers, "primary_key")) if cimb else None
+    cimb_email_check = (cimb and source.column.casefold() == "email" and database.column.casefold() == "email address"
+                        and not any(item.file_column.casefold() == "primary_key" for item in mappings))
     if cimb:
         scientific_count = sum(is_scientific_identifier(values[cimb_key_position]) for _, values in target.rows)
-        if scientific_count:
+        if cimb_email_check:
+            result.validation_notes.append(
+                "CIMB email check: a row matches when email, customer name and product agree on the same database record. "
+                "Account numbers are NOT CHECKED and do not affect this result.")
+            shared_emails = sum(len(lookup.get(normalize(values[target.headers.index(source.column)], options), [])) > 1
+                                for _, values in target.rows)
+            if shared_emails:
+                result.validation_notes.append(
+                    f"{shared_emails:,} rows use an email shared by multiple database records. "
+                    "Matching checks verify contact fields; no unique loan account is assigned.")
+            if scientific_count:
+                result.validation_notes.append(
+                    f"{scientific_count:,} account keys use scientific notation. Original account values are retained; "
+                    "rounded account digits are not reconstructed.")
+        elif scientific_count:
             result.validation_notes.append(
                 f"{scientific_count:,} primary_key values use scientific notation. Email finds candidate records only; "
                 "rounded account digits cannot be recovered. A full loan account number is required to pass.")
         result.validation_notes.append(
-            "CIMB checks use one database record for account number, email, customer name and product. "
+            "CIMB product comparison: "
             "PERSONAL LOAN = PLOAN CO / PLOAN PCO; LAZPAY = LAZPAY CO / LAZPAY PCO.")
         for name in result.ignored_columns:
-            result.unchecked_reasons[name] = ("No confirmed CIMB masterfile mapping; not used to establish customer identity"
+            result.unchecked_reasons[name] = ("Account number is NOT CHECKED in this automatic email check; email, name and product establish the result"
+                                               if name.casefold() == "primary_key" and cimb_email_check else
+                                               "No confirmed CIMB masterfile mapping; not used to establish customer identity"
                                                if name.casefold() == "indexone_uid" else
                                                "No confirmed CIMB masterfile mapping")
     if is_hsbc_sms_discount_blast(target.headers):
@@ -891,7 +909,7 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
                 signature, database_signatures[number], name_positions)), None)
         if blank_phone:
             matched = None
-        invalid_cimb_key = cimb and is_scientific_identifier(values[cimb_key_position])
+        invalid_cimb_key = cimb and not cimb_email_check and is_scientific_identifier(values[cimb_key_position])
         if invalid_cimb_key:
             matched = None
         if not key:
@@ -1315,7 +1333,7 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                             rule = "Full loan account number must match exactly; scientific notation never passes; rounded digits cannot be recovered"
                         elif header.casefold() == "product":
                             rule = "PERSONAL LOAN = PLOAN CO / PLOAN PCO; LAZPAY = LAZPAY CO / LAZPAY PCO; other values require text equality"
-                        rule += "; all four checked fields must match the same database record"
+                        rule += f"; all {len(result.mappings)} checked fields must match the same database record"
                     if (item.comparison == "Text" and item.file_column != result.source.column
                             and re.sub(r"[^a-z0-9]", "", item.database_column.casefold()) == "lastname"
                             and is_hsbc_mobile_pair(result.headers, result.database_headers,

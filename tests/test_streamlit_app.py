@@ -53,7 +53,7 @@ class StreamlitAppTests(unittest.TestCase):
     def detection_rows(self):
         return next(item.value for item in self.app.dataframe if "Lookup column" in item.value.columns)
 
-    def test_cimb_rounded_account_warning_survives_results_and_screenshot_view(self):
+    def test_cimb_email_check_discloses_unchecked_account_in_results_and_screenshot_view(self):
         self.database = BrowserFile(cimb_database(multiple_sheets=True))
         self.files = [BrowserFile(cimb_blast([[*CIMB_ALICE[:4], "2.08601E+13", *CIMB_ALICE[5:]]]))]
         self.app.run()
@@ -65,11 +65,15 @@ class StreamlitAppTests(unittest.TestCase):
         self.app.button(key="run_check").click().run()
         self.assertFalse(self.app.exception)
         self.assertFalse(self.app.error)
-        self.assertEqual(self.app.session_state["check_run"].results[0].count("DIFFERENT"), 1)
-        self.assertTrue(any("scientific notation" in warning.value for warning in self.app.warning))
+        result = self.app.session_state["check_run"].results[0]
+        self.assertEqual(result.count("MATCHED"), 1)
+        self.assertIn("primary_key", result.ignored_columns)
+        self.assertFalse(result.differences)
+        self.assertTrue(any("Account numbers are NOT CHECKED" in info.value for info in self.app.info))
+        self.assertFalse(any("required to pass" in warning.value for warning in self.app.warning))
         self.app.toggle(key="screenshot_view").set_value(True).run()
         self.assertFalse(self.app.exception)
-        self.assertTrue(any("scientific notation" in warning.value for warning in self.app.warning))
+        self.assertTrue(any("Account numbers are NOT CHECKED" in info.value for info in self.app.info))
 
     def test_database_blank_lookup_ids_are_skipped_without_blocking_the_browser(self):
         database, blast = blank_key_pair()

@@ -14,24 +14,26 @@ Double-click **Start Checker.bat**. Upload the CIMB masterfile under **Add your 
 
 | Campaign column | Master column | Check |
 | --- | --- | --- |
-| `primary_key` | `LOAN ACCOUNT NO.` | Full account number; leading zeros preserved |
+| `primary_key` | `LOAN ACCOUNT NO.` | Full account number when all account keys are available; NOT CHECKED in email mode |
 | `email` | `EMAIL ADDRESS` | Email, ignoring letter case and outer spaces |
 | `name` | `CUST_NAME` | Customer name, using the existing name comparison rules |
 | `PRODUCT` | `PLACEMENT` | PERSONAL LOAN = PLOAN CO / PLOAN PCO; LAZPAY = LAZPAY CO / LAZPAY PCO |
 
-With intact account numbers, `primary_key` identifies the database record. If any account keys use scientific notation, the whole file uses email to locate candidate records, while still comparing the full account number. Scientific-notation keys never pass, even when the contact fields agree or the master also contains a scientific-notation key. Rounded digits cannot be recovered from this CSV. Missing or blank lookup values remain **NOT FOUND** or **BLANK KEY**. All four fields must match the same database row; shared emails cannot combine values from different accounts, and an unmatched row never switches lookup columns.
+When every account key is intact and found in the masterfile, `primary_key` identifies the record and all four fields are checked. If any account key is blank, uses scientific notation, or is absent from the masterfile, the automatic checker selects **email mode for the whole file**. It matches `email` to `EMAIL ADDRESS` and compares `name` and `PRODUCT` on that same record. A matching email, name and product passes this contact check even when the account differs. `primary_key` is explicitly **NOT CHECKED** in email mode, and its original value is retained without assigning a replacement account number.
 
-`cc`, `bcc`, and `indexone_uid` have no confirmed mapping in this layout and remain **NOT CHECKED**. Additional campaign fields remain unchecked. The Excel report preserves original values, lists each difference, records the lookup and rules, and includes a **Field issues** worksheet with counts by field. Scientific-notation warnings remain visible after checking and in Screenshot view, and are saved in the report's Summary. No campaign eligibility or waiver calculation is checked.
+The selected lookup remains fixed for the file. Unknown or blank emails remain **NOT FOUND** or **BLANK KEY** in email mode; an email match cannot hide a different name or product. Shared emails must still match all three contact fields on one database row, and never establish a unique loan account. Explicit account checks outside automatic mode keep their strict account lookup.
 
-The supplied `1120 CIMB.csv` has **20,175 rows**. All emails occur in the masterfile's **ACTIVE** sheet, with **104 customer-name differences** and **no product differences** among the candidate records. All **20,175 account keys** use scientific notation and contain only **three distinct values**, so **no rows are fully verified**. Many name differences also show encoding damage. Re-export full account numbers as text and names with a consistent encoding, then run the check again. Email matches alone cannot establish the correct replacement account number.
+`cc`, `bcc`, and `indexone_uid` have no confirmed mapping in this layout and remain **NOT CHECKED**. Additional campaign fields remain unchecked. The Excel report preserves original values, lists each difference, records the lookup and rules, and includes a **Field issues** worksheet with counts by checked field. The email-check scope appears above the results overview, remains visible in Screenshot view, and is saved in the report's Summary and field coverage. No campaign eligibility or waiver calculation is checked.
 
-The report is `reports/CIMB_check_2026-11-20.xlsx`; SHA-256 verification in `reports/CIMB_source_verification_2026-11-20.json` confirms that both inputs were unchanged.
+The supplied `1120 CIMB.csv` has **20,175 rows**. All emails occur in the masterfile's **ACTIVE** sheet. **20,071 rows match email, name and product; 104 rows have customer-name differences.** There are no product differences. Many name differences show encoding damage. All account keys use scientific notation and contain only three distinct values, so account numbers are **NOT CHECKED**. Forty campaign rows use shared database emails; matching contact fields do not identify a unique loan account. To check account numbers too, re-export them as full text values and rerun. The original strict report is retained separately.
+
+The updated report is `reports/CIMB_email_check_2026-11-20.xlsx`; SHA-256 verification in `reports/CIMB_email_source_verification_2026-11-20.json` confirms that both inputs were unchanged.
 
 Run the same automatic check from PowerShell:
 
 ```powershell
 $inputFolder = Join-Path $env:USERPROFILE 'Downloads'
-.\.venv\Scripts\python.exe scripts\check_files.py --auto --database (Join-Path $inputFolder 'CIMB MASTERFILE 11182026.xlsx') --files (Join-Path $inputFolder '1120 CIMB.csv') --output 'reports/CIMB_check_2026-11-20.xlsx'
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database (Join-Path $inputFolder 'CIMB MASTERFILE 11182026.xlsx') --files (Join-Path $inputFolder '1120 CIMB.csv') --output 'reports/CIMB_email_check_2026-11-20.xlsx'
 ```
 
 ## Database rows with blank lookup values

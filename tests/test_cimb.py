@@ -1,4 +1,4 @@
-"""CIMB checks keep rounded account IDs in review while auditing contacts."""
+"""Automatic CIMB email checks tolerate unavailable accounts with clear coverage."""
 
 import io
 import json
@@ -66,47 +66,50 @@ class CIMBTests(unittest.TestCase):
 
     def test_full_accounts_check_other_fields_and_never_switch_identity(self):
         rows = [ALICE]
-        for position, wrong in [(0, "bob@example.test"), (3, "Bob Jones"), (6, "LAZPAY"),
-                                (4, "unknown"), (4, "")]:
+        for position, wrong in [(0, "bob@example.test"), (3, "Bob Jones"), (6, "LAZPAY")]:
             row = ALICE.copy()
             row[position] = wrong
             rows.append(row)
         result = run_prepared_check(self.prepare(cimb_blast(rows))).results[0]
         self.assertEqual([r[1] for r in result.records],
-                         ["MATCHED", "DIFFERENT", "DIFFERENT", "DIFFERENT", "NOT FOUND", "BLANK KEY"])
+                         ["MATCHED", "DIFFERENT", "DIFFERENT", "DIFFERENT"])
+        self.assertEqual(len(result.mappings), 4)
 
-    def test_scientific_ids_find_email_candidates_but_cannot_pass(self):
+    def test_scientific_ids_automatically_check_email_name_and_product(self):
         row = [*ALICE[:4], "2.08601E+13", *ALICE[5:]]
         prepared = self.prepare(cimb_blast([row]))
         self.assertEqual(prepared.files[0].source.column, "email")
         self.assertEqual(prepared.files[0].source.database_column, "EMAIL ADDRESS")
-        self.assertIn("cannot pass", prepared.files[0].note)
+        self.assertIn("Account numbers are NOT CHECKED", prepared.files[0].note)
         run = run_prepared_check(prepared)
         result = run.results[0]
-        self.assertEqual(result.count("DIFFERENT"), 1)
-        self.assertEqual(result.differences, [(2, 2, "primary_key → LOAN ACCOUNT NO.", "2.08601E+13", ALICE[4])])
-        self.assertIn("cannot be recovered", result.validation_notes[0])
+        self.assertEqual(result.count("MATCHED"), 1)
+        self.assertEqual(result.differences, [])
+        self.assertEqual(len(result.mappings), 3)
+        self.assertIn("primary_key", result.ignored_columns)
+        self.assertIn("Account numbers are NOT CHECKED", result.validation_notes[0])
         book = load_workbook(io.BytesIO(run.report), read_only=True, data_only=True)
         try:
             self.assertEqual(book["File 001"]["H2"].value, "2.08601E+13")
             self.assertEqual(book["File 001"]["H2"].data_type, "s")
             coverage = {r[0]: r for r in book["Mappings 001"].iter_rows(min_row=2, values_only=True)}
-            self.assertIn("never passes", coverage["primary_key"][4])
+            self.assertEqual(coverage["primary_key"][3], "NOT CHECKED")
+            self.assertIn("automatic email check", coverage["primary_key"][4])
             self.assertEqual(coverage["indexone_uid"][3], "NOT CHECKED")
             counts = {r[0]: r[2] for r in book["Field issues 001"].iter_rows(min_row=2, values_only=True)}
-            self.assertEqual(counts, {"email": 0, "name": 0, "primary_key": 1, "PRODUCT": 0})
+            self.assertEqual(counts, {"email": 0, "name": 0, "PRODUCT": 0})
             summary = list(book["Summary"].values)
-            self.assertIn("cannot be recovered", summary[8][summary[7].index("Check notes")])
+            self.assertIn("Account numbers are NOT CHECKED", summary[8][summary[7].index("Check notes")])
         finally:
             book.close()
 
     def test_shared_emails_cannot_combine_different_account_records(self):
         db_rows = [DATABASE_ROWS[0], ["LAZPAY CO", "20860123456790", "Bob Jones", ALICE[0], "000002"]]
         rows = [[*ALICE[:4], "2.08601E+13", *ALICE[5:]],
-                [ALICE[0], "", "", "Bob Jones", ALICE[4], "", "LAZPAY"],
+                [ALICE[0], "", "", "Alice Smith", ALICE[4], "", "LAZPAY"],
                 [ALICE[0], "", "", "Bob Jones", "20860123456790", "", "LAZPAY"]]
         result = run_prepared_check(self.prepare(cimb_blast(rows), cimb_database(db_rows))).results[0]
-        self.assertEqual([r[1] for r in result.records], ["DIFFERENT", "DIFFERENT", "MATCHED"])
+        self.assertEqual([r[1] for r in result.records], ["MATCHED", "DIFFERENT", "MATCHED"])
         self.assertEqual(result.records[2][2], "3")
 
     def test_email_audit_checks_name_product_unknown_and_blank_email(self):
@@ -114,16 +117,35 @@ class CIMBTests(unittest.TestCase):
         rows = [rounded, [*rounded[:3], "Wrong Name", *rounded[4:]],
                 [*rounded[:6], "LAZPAY"], ["unknown@example.test", *rounded[1:]], ["", *rounded[1:]]]
         result = run_prepared_check(self.prepare(cimb_blast(rows))).results[0]
-        self.assertEqual([r[1] for r in result.records], ["DIFFERENT"] * 3 + ["NOT FOUND", "BLANK KEY"])
+        self.assertEqual([r[1] for r in result.records], ["MATCHED", "DIFFERENT", "DIFFERENT", "NOT FOUND", "BLANK KEY"])
         self.assertTrue(any(d[0] == 3 and d[2] == "name → CUST_NAME" for d in result.differences))
         self.assertTrue(any(d[0] == 4 and d[2] == "PRODUCT → PLACEMENT" for d in result.differences))
 
-    def test_even_scientific_ids_in_both_files_cannot_pass(self):
+    def test_scientific_ids_in_both_files_only_pass_contact_fields(self):
         rounded = [*ALICE[:4], "2.08601E+13", *ALICE[5:]]
         db_row = [DATABASE_ROWS[0][0], "2.08601E+13", *DATABASE_ROWS[0][2:]]
         result = run_prepared_check(self.prepare(cimb_blast([rounded]), cimb_database([db_row]))).results[0]
-        self.assertEqual(result.count("DIFFERENT"), 1)
-        self.assertIn("full loan account number required", result.differences[0][4])
+        self.assertEqual(result.count("MATCHED"), 1)
+        self.assertIn("primary_key", result.ignored_columns)
+        self.assertEqual(len(result.mappings), 3)
+
+    def test_unknown_full_account_and_blank_account_trigger_email_check_for_the_whole_file(self):
+        rows = [ALICE, [*ALICE[:4], "unknown", *ALICE[5:]], [*ALICE[:4], "", *ALICE[5:]]]
+        prepared = self.prepare(cimb_blast(rows))
+        self.assertEqual(prepared.files[0].source.column, "email")
+        result = run_prepared_check(prepared).results[0]
+        self.assertEqual(result.count("MATCHED"), 3)
+        self.assertIn("primary_key", result.ignored_columns)
+        self.assertFalse(result.differences)
+
+    def test_explicit_account_checks_remain_strict_without_automatic_email_mode(self):
+        rows = [ALICE, [*ALICE[:4], "unknown", *ALICE[5:]], [*ALICE[:4], "", *ALICE[5:]],
+                [*ALICE[:4], "2.08601E+13", *ALICE[5:]]]
+        result = run_uploaded_check(UploadedSource(cimb_database(), "Sheet", "LOAN ACCOUNT NO."),
+                                    [UploadedSource(cimb_blast(rows), "CSV", "primary_key")],
+                                    Options(mapped_fields=True)).results[0]
+        self.assertEqual([r[1] for r in result.records], ["MATCHED", "NOT FOUND", "BLANK KEY", "NOT FOUND"])
+        self.assertEqual(len(result.mappings), 4)
 
     def test_reordered_headers_preambles_and_equivalent_excel_are_detected(self):
         order = [6, 4, 3, 1, 0, 5, 2]

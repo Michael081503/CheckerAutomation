@@ -14,7 +14,7 @@ import checker as _checker
 # adapter so detection and comparison use the same release. Ordinary reruns
 # keep their module objects and session results.
 _engine_refreshed = (not callable(getattr(_checker, "is_datagrid_pl_viber_blast", None))
-                     or getattr(_checker, "COMPARISON_VERSION", 0) < 14)
+                     or getattr(_checker, "COMPARISON_VERSION", 0) < 15)
 if _engine_refreshed:
     importlib.invalidate_caches()
     importlib.reload(_checker)
@@ -23,7 +23,7 @@ if _engine_refreshed:
 
 import web_checker as _web_checker
 
-if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 22:
+if _engine_refreshed or getattr(_web_checker, "AUTO_DETECTION_VERSION", 0) < 23:
     importlib.invalidate_caches()
     importlib.reload(_web_checker)
 
@@ -316,12 +316,14 @@ def render_results(run):
     for column, label, value in zip(columns, labels,
                                     [len(results), run.matched_in_all if multiple_databases else matched, review_count]):
         column.metric(label, f"{value:,}")
-    st.markdown(result_overview_html(run), unsafe_allow_html=True)
     for note in dict.fromkeys(note for result in results for note in result.validation_notes):
-        if "scientific notation" in note:
+        if note.startswith("CIMB email check:"):
+            st.info(note)
+        elif "A full loan account number is required to pass." in note:
             st.warning(note)
         else:
             st.caption(note)
+    st.markdown(result_overview_html(run), unsafe_allow_html=True)
     with st.container(key="result_details"):
         render_result_details(run)
 
@@ -371,6 +373,8 @@ def render_preparation(prepared, database_upload):
                                                else prepared.database.column)
                                            if info and prepared.database else ""),
                 "Check": ("Detected field mappings" if item.inferred
+                          else "CIMB email, name and product (account not checked)" if info and prepared.database_info
+                          and is_cimb_database(prepared.database_info.headers) and item.source.column.casefold() == "email"
                           else "CIMB account, email, name and product" if prepared.database_info and is_cimb_database(prepared.database_info.headers)
                           else "SALAD master list account details" if prepared.database_info and is_salad_ml_database(prepared.database_info.headers)
                           else "SALAD email account details" if info and is_datagrid_salad_email_blast(info.headers)

@@ -8,6 +8,32 @@ Results use the full browser width, with more room for long filenames in **File 
 
 After checking, setup and detection explanations disappear. The overview shows each difference on separate **Your file** and **Database** lines, with long values wrapping and empty values labeled **(blank)**. Multiple differences in a row are separated for easier review, and issues stack into labeled cards on small screens. Field names, mappings, skipped-row information and full differences remain available in the per-file details and Excel report. Replacing an upload clears the results and restores the detection summary.
 
+## CIMB email files and masterfiles
+
+Double-click **Start Checker.bat**. Upload the CIMB masterfile under **Add your databases**, add the campaign CSV under **Add files to check**, and click **Check files**. The automatic checker recognizes headers rather than filenames or dates. In a CIMB masterfile with an `ACTIVE` worksheet, it checks only that sheet; `POUT`, `WAIVER`, and the other worksheets do not supply replacement matches. A standalone worksheet with the same master columns is also supported.
+
+| Campaign column | Master column | Check |
+| --- | --- | --- |
+| `primary_key` | `LOAN ACCOUNT NO.` | Full account number; leading zeros preserved |
+| `email` | `EMAIL ADDRESS` | Email, ignoring letter case and outer spaces |
+| `name` | `CUST_NAME` | Customer name, using the existing name comparison rules |
+| `PRODUCT` | `PLACEMENT` | PERSONAL LOAN = PLOAN CO / PLOAN PCO; LAZPAY = LAZPAY CO / LAZPAY PCO |
+
+With intact account numbers, `primary_key` identifies the database record. If any account keys use scientific notation, the whole file uses email to locate candidate records, while still comparing the full account number. Scientific-notation keys never pass, even when the contact fields agree or the master also contains a scientific-notation key. Rounded digits cannot be recovered from this CSV. Missing or blank lookup values remain **NOT FOUND** or **BLANK KEY**. All four fields must match the same database row; shared emails cannot combine values from different accounts, and an unmatched row never switches lookup columns.
+
+`cc`, `bcc`, and `indexone_uid` have no confirmed mapping in this layout and remain **NOT CHECKED**. Additional campaign fields remain unchecked. The Excel report preserves original values, lists each difference, records the lookup and rules, and includes a **Field issues** worksheet with counts by field. Scientific-notation warnings remain visible after checking and in Screenshot view, and are saved in the report's Summary. No campaign eligibility or waiver calculation is checked.
+
+The supplied `1120 CIMB.csv` has **20,175 rows**. All emails occur in the masterfile's **ACTIVE** sheet, with **104 customer-name differences** and **no product differences** among the candidate records. All **20,175 account keys** use scientific notation and contain only **three distinct values**, so **no rows are fully verified**. Many name differences also show encoding damage. Re-export full account numbers as text and names with a consistent encoding, then run the check again. Email matches alone cannot establish the correct replacement account number.
+
+The report is `reports/CIMB_check_2026-11-20.xlsx`; SHA-256 verification in `reports/CIMB_source_verification_2026-11-20.json` confirms that both inputs were unchanged.
+
+Run the same automatic check from PowerShell:
+
+```powershell
+$inputFolder = Join-Path $env:USERPROFILE 'Downloads'
+.\.venv\Scripts\python.exe scripts\check_files.py --auto --database (Join-Path $inputFolder 'CIMB MASTERFILE 11182026.xlsx') --files (Join-Path $inputFolder '1120 CIMB.csv') --output 'reports/CIMB_check_2026-11-20.xlsx'
+```
+
 ## Database rows with blank lookup values
 
 Database rows with a blank lookup identifier are automatically excluded from comparison. `None`, empty strings and whitespace-only IDs do not block a mixed database containing valid records. Entirely empty rows are already ignored. Other blank fields do not remove a customer record: a valid account with a blank email is still checked. The source workbook is read without modification.

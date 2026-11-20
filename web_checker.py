@@ -15,11 +15,11 @@ from typing import Callable
 
 from checker import (
     CHCODE_ALIASES, ColumnMapping, FileResult, Options, Source, Table, balance_viber_database_fields, check_files, chcode_columns, export_report,
-    find_header, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_hsbc_sms_discount_blast, is_salad_endo_database, is_salad_endo_pair, is_salad_ml_database, match_column, normalize, phone_column, read_table, sheet_names,
+    find_header, is_cimb_database, is_cimb_email_blast, is_scientific_identifier, is_datagrid_balance_viber_blast, is_datagrid_pl_viber_blast, is_datagrid_viber_blast, is_hsbc_sms_discount_blast, is_salad_endo_database, is_salad_endo_pair, is_salad_ml_database, match_column, normalize, phone_column, read_table, sheet_names,
 )
 from auto_match import database_key_candidates, has_identifier_header, infer_layout, is_assignment_template
 
-AUTO_DETECTION_VERSION = 21
+AUTO_DETECTION_VERSION = 22
 
 
 @dataclass(frozen=True)
@@ -120,6 +120,18 @@ def inspect_upload(upload: Upload, sheet: str | None = None, *, has_headers: boo
 
 def _key_column(table: Table, database_keys: set[str], database_headers=()) -> tuple[str, str]:
     """Choose one lookup for the entire file; unmatched rows never switch keys."""
+    if is_cimb_database(database_headers) and is_cimb_email_blast(table.headers):
+        position = table.headers.index(find_header(table.headers, "primary_key"))
+        scientific_count = sum(is_scientific_identifier(values[position]) for _, values in table.rows)
+        if scientific_count:
+            return find_header(table.headers, "email"), (
+                f"CIMB layout detected; {scientific_count:,} account keys use scientific notation. "
+                "Email finds candidate records only. Full account number, email, name and product must match one record; "
+                "rounded account numbers cannot pass. cc, bcc and indexone_uid remain NOT CHECKED")
+        return find_header(table.headers, "primary_key"), (
+            "CIMB layout detected; primary_key matches LOAN ACCOUNT NO.; email, name and PRODUCT "
+            "are checked against EMAIL ADDRESS, CUST_NAME and PLACEMENT on the same account. "
+            "cc, bcc and indexone_uid remain NOT CHECKED")
     if is_salad_endo_pair(table.headers, database_headers):
         return match_column(table.headers, database_headers), "SBF endorsement layout detected (SALAD / PL); accountnumber matches caseAccountNo; email and chname are checked on the same account. Staff assignments are not checked"
     if (is_salad_endo_database(database_headers) and not find_header(database_headers, "CHCODE")
@@ -221,9 +233,20 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
         try:
             database_path = _write_upload(root / "database", database)
             database_sheets = tuple(sheet_names(database_path))
+            selected_sheets = database_sheets
+            active_sheet = next((sheet for sheet in database_sheets if sheet.strip().casefold() == "active"), "")
+            if active_sheet:
+                try:
+                    active_headers = read_table(database_path, active_sheet, headers_only=True).headers
+                except ValueError:
+                    active_headers = []
+                if is_cimb_database(active_headers):
+                    # CIMB's POUT, WAIVER and other tabs are separate populations.
+                    # Only ACTIVE establishes the database for campaign checks.
+                    selected_sheets = (active_sheet,)
             candidates = []
             database_errors = []
-            for sheet in database_sheets:
+            for sheet in selected_sheets:
                 try:
                     table = read_table(database_path, sheet)
                     column = match_column(table.headers)
@@ -302,7 +325,10 @@ def prepare_uploaded_check(database: Upload, files: list[Upload]) -> PreparedChe
                 source = UploadedSource(upload, target.sheet, column,
                                         mappings=layout.mappings if layout else None,
                                         has_headers=has_headers,
-                                        database_column=layout.database_key if layout else "",
+                                        database_column=(layout.database_key if layout else
+                                                         find_header(table.headers, "EMAIL ADDRESS")
+                                                         if is_cimb_database(table.headers) and is_cimb_email_blast(target.headers)
+                                                         and column.casefold() == "email" else ""),
                                         allow_unnamed_headers=layout is not None)
                 prepared.append(PreparedUpload(source, info, note=note, inferred=layout is not None,
                                                mapping_evidence=layout.evidence if layout else ()))

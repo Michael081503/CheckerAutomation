@@ -13,6 +13,7 @@ from test_sbf_discount_viber import discount_database
 from test_hsbc_sms_discount import ALICE as SMS_ALICE, sms_blast, sms_database
 from test_blank_database_keys import blank_key_pair
 from test_multi_database import dual_database_uploads
+from test_cimb import ALICE as CIMB_ALICE, cimb_blast, cimb_database
 
 from test_sbf_salad_viber import BLAST_HEADERS, salad_database, salad_row, salad_viber_uploads
 from test_web_checker import cbs_apd_uploads, cbs_pl_uploads, csv_upload, database_upload, datagrid_upload, email_blast_upload, hsbc_mobile_uploads, xlsx_upload
@@ -51,6 +52,24 @@ class StreamlitAppTests(unittest.TestCase):
 
     def detection_rows(self):
         return next(item.value for item in self.app.dataframe if "Lookup column" in item.value.columns)
+
+    def test_cimb_rounded_account_warning_survives_results_and_screenshot_view(self):
+        self.database = BrowserFile(cimb_database(multiple_sheets=True))
+        self.files = [BrowserFile(cimb_blast([[*CIMB_ALICE[:4], "2.08601E+13", *CIMB_ALICE[5:]]]))]
+        self.app.run()
+        self.assertFalse(self.app.exception)
+        detection = self.detection_rows().iloc[0]
+        self.assertEqual(detection["Lookup column"], "email")
+        self.assertEqual(detection["Database lookup column"], "EMAIL ADDRESS")
+        self.assertIn("CIMB", detection["Check"])
+        self.app.button(key="run_check").click().run()
+        self.assertFalse(self.app.exception)
+        self.assertFalse(self.app.error)
+        self.assertEqual(self.app.session_state["check_run"].results[0].count("DIFFERENT"), 1)
+        self.assertTrue(any("scientific notation" in warning.value for warning in self.app.warning))
+        self.app.toggle(key="screenshot_view").set_value(True).run()
+        self.assertFalse(self.app.exception)
+        self.assertTrue(any("scientific notation" in warning.value for warning in self.app.warning))
 
     def test_database_blank_lookup_ids_are_skipped_without_blocking_the_browser(self):
         database, blast = blank_key_pair()

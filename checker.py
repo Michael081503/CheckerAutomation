@@ -15,13 +15,13 @@ from typing import Callable, Iterable
 from openpyxl import Workbook, load_workbook
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xlsm"}
-COMPARISON_VERSION = 13
+COMPARISON_VERSION = 14
 CHCODE_ALIASES = ("chcode", "primary_key", "indexone_uid")
 PHONE_ALIASES = ("mobilephone", "formattedmobile", "phonenumber", "mobilenumber",
                  "phone", "mobile", "contactnumber", "lastcalledno")
 CUSTOMER_NAME_ALIASES = {"name", "fullname", "chname", "chnameformat", "firstname",
                          "middlename", "lastname", "surname", "givenname", "customername",
-                         "customerfullname", "debtorname", "borrowername", "accountname", "casecustomername"}
+                         "customerfullname", "debtorname", "borrowername", "accountname", "casecustomername", "custname"}
 HSBC_LAST_NAME_TITLE = re.compile(r"^(?:mr\.[ \t]*/[ \t]*ms\.|mr\.|ms\.)[ \t]+(?=\S)", re.IGNORECASE)
 
 
@@ -84,6 +84,7 @@ class FileResult:
     database_match_column: str = ""
     database_source: Source | None = None
     skipped_database_rows: list[int] = field(default_factory=list)
+    validation_notes: list[str] = field(default_factory=list)
 
     @property
     def file_identifier(self) -> str:
@@ -187,6 +188,19 @@ def is_salad_ml_database(headers: Iterable) -> bool:
             "casecustomername", "casecustomeremail"}.issubset(_header_names(headers))
 
 
+def is_cimb_database(headers: Iterable) -> bool:
+    """CIMB account master, including its ACTIVE and pulled-out worksheets."""
+    return {"loan account no.", "cust_name", "email address", "placement"}.issubset(_header_names(headers))
+
+
+def is_cimb_email_blast(headers: Iterable) -> bool:
+    return {"email", "name", "primary_key", "product"}.issubset(_header_names(headers))
+
+
+def is_scientific_identifier(value) -> bool:
+    return bool(re.fullmatch(r"[+-]?[0-9]+(?:\.[0-9]+)?[eE][+-]?[0-9]+", str(value or "").strip()))
+
+
 def is_datagrid_email_blast(headers: Iterable) -> bool:
     """Recognize email-blast fields that have DataGrid counterparts."""
     names = _header_names(headers)
@@ -224,6 +238,10 @@ def match_column(headers: Iterable[str], database_headers: Iterable[str] | None 
     """Select the lookup column, using the database schema for account blasts."""
     headers = list(headers)
     database_headers = list(database_headers) if database_headers is not None else None
+    if is_cimb_database(headers):
+        return next(header for header in headers if header.strip().casefold() == "loan account no.")
+    if database_headers is not None and is_cimb_database(database_headers) and is_cimb_email_blast(headers):
+        return next(header for header in headers if header.strip().casefold() == "primary_key")
     if is_salad_ml_database(headers):
         return next(header for header in headers if header.strip().casefold() == "uid code/old ic")
     if is_datagrid_pl_viber_blast(headers):
@@ -357,7 +375,8 @@ def is_filename_identified_pair(file_headers: Iterable[str], database_headers: I
             or is_datagrid_viber_pair(file_headers, database_headers, file_key, database_key)
             or is_datagrid_pl_viber_pair(file_headers, database_headers, file_key, database_key)
             or is_salad_endo_pair(file_headers, database_headers, file_key, database_key)
-            or is_hsbc_mobile_pair(file_headers, database_headers, file_key, database_key))
+            or is_hsbc_mobile_pair(file_headers, database_headers, file_key, database_key)
+            or (is_cimb_database(database_headers) and is_cimb_email_blast(file_headers)))
 
 
 def _has_supported_header(values: Iterable) -> bool:
@@ -367,6 +386,7 @@ def _has_supported_header(values: Iterable) -> bool:
         names & {"flow_stage", "name", "email", "chname", "accountnumber"})
     return (_has_chcode(values) or bool(phone_column(names)) or is_datagrid_database(values)
             or is_datagrid_email_blast(values) or is_salad_endo_database(values) or is_salad_ml_database(values)
+            or is_cimb_database(values)
             or {"email", "chname", "accountnumber"}.issubset(names) or identifier_layout)
 
 
@@ -563,6 +583,11 @@ def suggest_mappings(file_headers: list[str], database_headers: list[str],
                      file_key: str, database_key: str) -> list[ColumnMapping]:
     """Direct header matches and explicit HSBC export aliases; never infer by position."""
     database_names = {name.casefold(): name for name in database_headers}
+    if is_cimb_database(database_headers) and is_cimb_email_blast(file_headers):
+        fields = {"primary_key": ("LOAN ACCOUNT NO.", "Text"), "email": ("EMAIL ADDRESS", "Text"),
+                  "name": ("CUST_NAME", "Text"), "product": ("PLACEMENT", "Product")}
+        return [ColumnMapping(name, database_names[fields[name.casefold()][0].casefold()], fields[name.casefold()][1])
+                for name in file_headers if name.casefold() in fields]
     if (is_hsbc_sms_discount_blast(file_headers)
             and is_hsbc_mobile_pair(file_headers, database_headers, file_key, database_key)):
         # Offers and unnamed helpers are deliberately excluded, even if their
@@ -684,7 +709,9 @@ def compare_value(value, comparison: str, options: Options, *, customer_name: bo
             pass
     if comparison == "Product":
         product = str(value or "").strip().casefold()
-        family = {"credit card": "cards", "cards": "cards", "personal loan": "loan", "loan": "loan"}
+        family = {"credit card": "cards", "cards": "cards", "personal loan": "loan", "loan": "loan",
+                  "ploan co": "loan", "ploan pco": "loan", "lazpay": "lazpay",
+                  "lazpay co": "lazpay", "lazpay pco": "lazpay"}
         if product in family:
             return family[product]
     return normalize(value, options)
@@ -777,6 +804,21 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
     result.mappings = mappings
     result.ignored_columns = [name for name in target.headers if name not in {item.file_column for item in mappings}
                               and name != result.flow_stage_column]
+    cimb = is_cimb_database(table.headers) and is_cimb_email_blast(target.headers)
+    cimb_key_position = target.headers.index(find_header(target.headers, "primary_key")) if cimb else None
+    if cimb:
+        scientific_count = sum(is_scientific_identifier(values[cimb_key_position]) for _, values in target.rows)
+        if scientific_count:
+            result.validation_notes.append(
+                f"{scientific_count:,} primary_key values use scientific notation. Email finds candidate records only; "
+                "rounded account digits cannot be recovered. A full loan account number is required to pass.")
+        result.validation_notes.append(
+            "CIMB checks use one database record for account number, email, customer name and product. "
+            "PERSONAL LOAN = PLOAN CO / PLOAN PCO; LAZPAY = LAZPAY CO / LAZPAY PCO.")
+        for name in result.ignored_columns:
+            result.unchecked_reasons[name] = ("No confirmed CIMB masterfile mapping; not used to establish customer identity"
+                                               if name.casefold() == "indexone_uid" else
+                                               "No confirmed CIMB masterfile mapping")
     if is_hsbc_sms_discount_blast(target.headers):
         for name in result.ignored_columns:
             if name.casefold() == "discount":
@@ -849,6 +891,9 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
                 signature, database_signatures[number], name_positions)), None)
         if blank_phone:
             matched = None
+        invalid_cimb_key = cimb and is_scientific_identifier(values[cimb_key_position])
+        if invalid_cimb_key:
+            matched = None
         if not key:
             status = "BLANK KEY"
         elif key not in lookup:
@@ -875,6 +920,9 @@ def _compare_mapped(table: Table, target: Table, database: Source, source: Sourc
                 elif blank_phone and item.file_column == required_phone:
                     label = item.file_column if item.file_column == item.database_column else f"{item.file_column} → {item.database_column}"
                     result.differences.append((row_number, matched, label, actual, "(phone number required)"))
+                elif invalid_cimb_key and file_pos == cimb_key_position:
+                    result.differences.append((row_number, matched, item.file_column, actual,
+                                               "(full loan account number required; scientific notation cannot verify identity)"))
         result.records.append((row_number, status, str(matched) if matched is not None else "", values))
 
 
@@ -928,6 +976,10 @@ def check_files(database: Source, files: list[Source], options: Options,
             if source.column not in target.headers:
                 raise ValueError(f"Match column '{source.column}' no longer exists.")
             comparison_database, comparison_lookup = database, lookup
+            cimb_master_fields = _header_names(table.headers) & {"loan account no.", "cust_name", "placement"}
+            if (options.mapped_fields and is_cimb_email_blast(target.headers) and len(cimb_master_fields) >= 2
+                    and not is_cimb_database(table.headers)):
+                raise ValueError("CIMB email checks require LOAN ACCOUNT NO., EMAIL ADDRESS, CUST_NAME and PLACEMENT in the database.")
             if (options.mapped_fields and not source.database_column
                     and is_hsbc_sms_discount_blast(target.headers)
                     and not is_hsbc_mobile_pair(target.headers, table.headers, source.column, database.column)):
@@ -1158,7 +1210,7 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                      "Comparison", "Different rows", "Extra rows", "Missing database rows", "Missing columns", "Extra columns", "Differences sheet", "Missing rows sheet",
                      "Scope", "Fields checked", "Unchecked file columns", "Mappings sheet",
                      "FLOW_STAGE", "File identifier column", "Database match column", "Database", "Database sheet",
-                     "Skipped database rows", "Skipped database rows sheet"])
+                     "Skipped database rows", "Skipped database rows sheet", "Check notes"])
     for index, result in enumerate(results, 1):
         row_database = result.database_source or database
         name = f"File {index:03d}"
@@ -1173,7 +1225,8 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                          ", ".join(result.ignored_columns), f"Mappings {index:03d}" if result.comparison_mode == "Uploaded rows" else "",
                          result.flow_stage, result.flow_stage_column, result.database_match_column or row_database.column,
                          str(row_database.path), row_database.sheet,
-                         len(result.skipped_database_rows), f"Skipped DB {index:03d}" if result.skipped_database_rows else ""])
+                         len(result.skipped_database_rows), f"Skipped DB {index:03d}" if result.skipped_database_rows else "",
+                         " ".join(result.validation_notes)])
         if result.skipped_database_rows:
             skipped = book.create_sheet(f"Skipped DB {index:03d}")
             append(skipped, ["Database source row", "Lookup column", "Reason"])
@@ -1191,6 +1244,14 @@ def export_report(path: Path, database: Source, options: Options, results: list[
         append(differences, ["Source row", "Database row", "Column", "File value", "Database value"])
         for difference in result.differences:
             append(differences, difference)
+        differences.auto_filter.ref = f"A1:E{len(result.differences) + 1}"
+        if is_cimb_database(result.database_headers) and is_cimb_email_blast(result.headers):
+            field_issues = book.create_sheet(f"Field issues {index:03d}")
+            append(field_issues, ["File column", "Database column", "Rows with differences"])
+            for item in result.mappings:
+                label = item.file_column if item.file_column == item.database_column else f"{item.file_column} → {item.database_column}"
+                count = sum(difference[2] in {label, item.file_column} for difference in result.differences)
+                append(field_issues, [item.file_column, item.database_column, count])
         if result.comparison_mode == "Uploaded rows":
             mapping_sheet = book.create_sheet(f"Mappings {index:03d}")
             mapping_sheet.freeze_panes = "A2"
@@ -1249,6 +1310,12 @@ def export_report(path: Path, database: Source, options: Options, results: list[
                                                           and is_customer_name_column(item.file_column))):
                         rule += "; question marks are ignored in customer names"
                         rule += "; replacement character U+FFFD matches only a corresponding Ñ/ñ; other letters must match"
+                    if is_cimb_database(result.database_headers) and is_cimb_email_blast(result.headers):
+                        if header.casefold() == "primary_key":
+                            rule = "Full loan account number must match exactly; scientific notation never passes; rounded digits cannot be recovered"
+                        elif header.casefold() == "product":
+                            rule = "PERSONAL LOAN = PLOAN CO / PLOAN PCO; LAZPAY = LAZPAY CO / LAZPAY PCO; other values require text equality"
+                        rule += "; all four checked fields must match the same database record"
                     if (item.comparison == "Text" and item.file_column != result.source.column
                             and re.sub(r"[^a-z0-9]", "", item.database_column.casefold()) == "lastname"
                             and is_hsbc_mobile_pair(result.headers, result.database_headers,
